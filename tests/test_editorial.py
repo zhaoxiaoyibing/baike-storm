@@ -7,7 +7,7 @@ def test_parse_example_file():
     ed = editorial.load_editorial()
     assert ed, "包内示例指南应可解析"
     # 示例文件含 3 个大类
-    assert {"人物", "电子产品", "自然地理"} <= set(editorial.dalei_names())
+    assert {"体育人物", "电子产品", "自然地理"} <= set(editorial.dalei_names())
 
 
 def test_skeleton_extracted():
