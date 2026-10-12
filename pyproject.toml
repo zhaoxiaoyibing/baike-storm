@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "baike-storm"
+version = "0.1.0"
+description = "从零重建中文百科词条:多视角检索调研 + 两段式大纲 + 分节生成的 STORM 流水线"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "baike-storm contributors" }]
+requires-python = ">=3.10"
+keywords = ["storm", "llm", "retrieval", "encyclopedia", "rag", "agents"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Text Processing :: Markup",
+]
+dependencies = [
+    "httpx>=0.25",
+]
+
+[project.optional-dependencies]
+# Tavily 真实检索后端(离线 mock/demo 不需要)
+search = ["tavily-python>=0.7.0"]
+# 轨迹可视化:在 LangSmith 平台查看一次生成的完整调用链(需自备 LANGSMITH_* 凭据)
+tracing = ["langsmith>=0.1.0"]
+# 评测:以 Anthropic 端点作为 LLM-judge 后端(score.py 的 JUDGE_BACKEND=anthropic)
+judge = ["langchain-anthropic>=0.1.0"]
+tests = ["pytest>=7.0"]
+all = [
+    "tavily-python>=0.7.0",
+    "langsmith>=0.1.0",
+    "langchain-anthropic>=0.1.0",
+    "pytest>=7.0",
+]
+
+[project.scripts]
+baike-storm = "baike_storm.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+baike_storm = [
+    "static/*.html",
+    "skills/figure-layout/*.md",
+    "data/*.md",
+    "data/mock_corpus/*.json",
+    "data/mock_corpus/*.md",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
