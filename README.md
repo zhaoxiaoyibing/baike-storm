@@ -211,6 +211,11 @@ pip install -e ".[tests]"
 python -m pytest          # 全部离线,不发起任何网络请求
 ```
 
+## 公开演示
+
+- [离线 HTML 示例](examples/ai-demo/index.html)
+- [演示材料说明与前端录屏预留](examples/README.md)
+
 ## 扩展指南
 
 - **换 LLM**:任意 OpenAI 兼容服务,`STORM_LLM_*` 三件套即可(见 `llm.py`)。
