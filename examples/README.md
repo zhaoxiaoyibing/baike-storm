@@ -14,6 +14,12 @@ open examples/ai-demo/index.html
 
 GitHub 文件页默认显示 HTML 源码；如果需要网页形式的在线预览，可以后续为仓库启用 GitHub Pages。
 
+启用 Pages 后，项目根地址会自动跳转到这个示例：
+
+<https://zhaoxiaoyibing.github.io/baike-storm/>
+
+也可以直接访问：<https://zhaoxiaoyibing.github.io/baike-storm/examples/ai-demo/>
+
 ## 前端录屏
 
 录屏位置已预留在 [`frontend-demo/`](frontend-demo/)。
