@@ -214,6 +214,8 @@ python -m pytest          # 全部离线,不发起任何网络请求
 ## 公开演示
 
 - [离线 HTML 示例](examples/ai-demo/index.html)
+- [凯里·欧文 HTML 示例](examples/kyrie-demo/index.html)
+- [前端配乐演示视频](examples/frontend-demo/index.html)
 - [演示材料说明与前端录屏预留](examples/README.md)
 
 启用 GitHub Pages 后可直接打开：<https://zhaoxiaoyibing.github.io/baike-storm/>

@@ -1,8 +1,8 @@
 # 前端使用演示视频
 
-这里预留给 baike-storm Web 前端的录屏示例。
+这里提供 baike-storm Web 前端的录屏示例。
 
-- 视频文件：待补充
-- 视频链接：待补充
+- [在线播放配乐演示](index.html)
+- 视频文件：`baike-storm-kyrie-demo.mp4`
 
 建议录制内容：启动 `baike-storm web`、输入词条、观察多视角调研和分节生成过程，以及打开最终 HTML 页面。
