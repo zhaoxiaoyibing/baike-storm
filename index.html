@@ -5,24 +5,42 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>baike-storm 公开演示</title>
     <style>
-      body { max-width: 760px; margin: 56px auto; padding: 0 24px; font: 16px/1.8 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; color: #1f1e1b; background: #f7f6f2; }
-      main { padding: 32px; background: #fffefb; border-radius: 16px; box-shadow: 0 8px 30px rgba(64,52,30,.10); }
-      h1 { margin-top: 0; font-family: Georgia, serif; }
+      body { max-width: 980px; margin: 36px auto; padding: 0 20px; font: 16px/1.8 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; color: #1f1e1b; background: #f7f6f2; }
+      main { padding: 32px; background: #fffefb; border-radius: 18px; box-shadow: 0 8px 30px rgba(64,52,30,.10); }
+      h1 { margin: 0; font-family: Georgia, serif; font-size: clamp(30px, 5vw, 48px); }
+      .lead { color: #46433d; max-width: 48em; }
+      .eyebrow { color: #2d6a88; font-size: 13px; letter-spacing: .12em; }
+      .demo { margin: 24px 0; }
+      video { width: 100%; max-height: 520px; display: block; background: #111; border-radius: 12px; }
+      .caption { color: #7a766d; font-size: 13px; margin-top: 8px; }
+      .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 24px; }
+      .card { overflow: hidden; border: 1px solid #e6e2d9; border-radius: 12px; background: #fffefb; }
+      .card img { width: 100%; height: 180px; display: block; object-fit: cover; }
+      .card-body { padding: 16px; }
+      .card h2 { margin: 0 0 4px; font-size: 20px; }
+      .card p { margin: 0 0 10px; color: #7a766d; font-size: 14px; }
       a { color: #2d6a88; }
-      li { margin: 12px 0; }
-      small { color: #7a766d; }
+      @media (max-width: 680px) { main { padding: 22px; } .cards { grid-template-columns: 1fr; } }
     </style>
   </head>
   <body>
     <main>
-      <h1>baike-storm 公开演示</h1>
-      <p>这里展示离线生成的百科 HTML 页面和前端使用录屏。</p>
-      <ul>
-        <li><a href="examples/kyrie-demo/">凯里·欧文词条示例</a></li>
-        <li><a href="examples/ai-demo/">人工智能离线示例</a></li>
-        <li><a href="examples/frontend-demo/">前端使用演示视频</a></li>
-      </ul>
-      <small>示例内容仅用于展示页面和交互效果。</small>
+      <p class="eyebrow">BAIKE-STORM · PUBLIC DEMO</p>
+      <h1>从检索到成文，一次看懂百科生成流程</h1>
+      <p class="lead">先看前端录屏，再打开凯里·欧文的完整词条页面，直观看到多视角调研、分节写作、引用和配图如何汇聚成一页可阅读的百科内容。</p>
+      <section class="demo" aria-labelledby="video-title">
+        <h2 id="video-title">🎬 前端生成演示 · 倍速配乐版</h2>
+        <video controls preload="metadata" playsinline poster="examples/kyrie-demo/img/hero_3.jpg">
+          <source src="examples/frontend-demo/baike-storm-kyrie-demo.mp4" type="video/mp4">
+          当前浏览器不支持视频播放，请打开<a href="examples/frontend-demo/">视频页面</a>。
+        </video>
+        <p class="caption">输入词条后，实时查看调研、提纲、写作和渲染阶段。</p>
+      </section>
+      <section class="cards" aria-label="公开示例">
+        <article class="card"><a href="examples/kyrie-demo/"><img src="examples/kyrie-demo/img/hero_3.jpg" alt="凯里·欧文词条示例封面"><div class="card-body"><h2>凯里·欧文词条</h2><p>带信息栏、引用、章节配图和目录导航的完整页面。</p>查看词条 →</div></a></article>
+        <article class="card"><a href="examples/ai-demo/"><div class="card-body"><h2>人工智能离线示例</h2><p>无需密钥即可运行的 MockLLM 全链路演示。</p>打开示例 →</div></a></article>
+      </section>
+      <p class="caption">示例内容仅用于展示页面和交互效果。返回<a href="https://github.com/zhaoxiaoyibing/baike-storm">GitHub 仓库</a>查看源码。</p>
     </main>
   </body>
 </html>

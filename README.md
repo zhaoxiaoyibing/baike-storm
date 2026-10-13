@@ -3,6 +3,14 @@
 **从零重建中文百科词条**:多视角检索调研 + 两段式大纲 + 分节生成的 STORM 流水线,
 端到端输出可直接阅读的类百科 HTML 页面。
 
+### 先看演示
+
+🎬 **[打开 GitHub Pages 演示首页](https://zhaoxiaoyibing.github.io/baike-storm/)** · [直接看前端配乐视频](https://zhaoxiaoyibing.github.io/baike-storm/examples/frontend-demo/) · **[阅读凯里·欧文完整词条](https://zhaoxiaoyibing.github.io/baike-storm/examples/kyrie-demo/)**
+
+![凯里·欧文词条示例](examples/kyrie-demo/img/hero_3.jpg)
+
+打开首页即可先看倍速录屏，再进入带信息栏、目录、引用和配图的凯里·欧文示例页面。
+
 本项目是 [STORM](https://arxiv.org/abs/2402.14207)(*Assisting in Writing Wikipedia-like Articles From Scratch with Multi-perspective Question Asking*) 的**中文完整实现**。
 不依赖任何内部服务:LLM 网关、检索后端、评测 judge 全部可插拔,离线可跑通全链路(demo 模式)。
 
