@@ -7,6 +7,8 @@
 
 🎬 **[打开 GitHub Pages 演示首页](https://zhaoxiaoyibing.github.io/baike-storm/)** · **[阅读凯里·欧文完整词条](https://zhaoxiaoyibing.github.io/baike-storm/examples/kyrie-demo/)**
 
+<p><a href="https://www.bilibili.com/video/BV13kpz64EUp/">▶️ 在哔哩哔哩观看前端生成演示</a></p>
+
 <video controls preload="metadata" poster="https://zhaoxiaoyibing.github.io/baike-storm/examples/kyrie-demo/img/hero_3.jpg" width="100%">
   <source src="https://zhaoxiaoyibing.github.io/baike-storm/examples/frontend-demo/baike-storm-kyrie-demo.mp4" type="video/mp4">
   当前页面不支持内嵌播放，请打开<a href="https://zhaoxiaoyibing.github.io/baike-storm/examples/frontend-demo/">视频页面</a>。
