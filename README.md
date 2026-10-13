@@ -14,7 +14,11 @@
 
 <sub>前端生成流程 · 倍速配乐版 · 也可<a href="https://zhaoxiaoyibing.github.io/baike-storm/examples/frontend-demo/">打开独立视频页</a></sub>
 
-![凯里·欧文词条示例](examples/kyrie-demo/img/hero_3.jpg)
+<a href="https://zhaoxiaoyibing.github.io/baike-storm/examples/kyrie-demo/">
+  <img src="examples/kyrie-demo/kyrie-page-preview.png" alt="凯里·欧文完整词条页面截图" width="100%">
+</a>
+
+<sub>点击截图可打开完整词条页面。</sub>
 
 打开首页即可先看倍速录屏，再进入带信息栏、目录、引用和配图的凯里·欧文示例页面。
 
