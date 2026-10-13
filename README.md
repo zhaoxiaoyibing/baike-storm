@@ -5,7 +5,14 @@
 
 ### 先看演示
 
-🎬 **[打开 GitHub Pages 演示首页](https://zhaoxiaoyibing.github.io/baike-storm/)** · [直接看前端配乐视频](https://zhaoxiaoyibing.github.io/baike-storm/examples/frontend-demo/) · **[阅读凯里·欧文完整词条](https://zhaoxiaoyibing.github.io/baike-storm/examples/kyrie-demo/)**
+🎬 **[打开 GitHub Pages 演示首页](https://zhaoxiaoyibing.github.io/baike-storm/)** · **[阅读凯里·欧文完整词条](https://zhaoxiaoyibing.github.io/baike-storm/examples/kyrie-demo/)**
+
+<video controls preload="metadata" poster="https://zhaoxiaoyibing.github.io/baike-storm/examples/kyrie-demo/img/hero_3.jpg" width="100%">
+  <source src="https://zhaoxiaoyibing.github.io/baike-storm/examples/frontend-demo/baike-storm-kyrie-demo.mp4" type="video/mp4">
+  当前页面不支持内嵌播放，请打开<a href="https://zhaoxiaoyibing.github.io/baike-storm/examples/frontend-demo/">视频页面</a>。
+</video>
+
+<sub>前端生成流程 · 倍速配乐版 · 也可<a href="https://zhaoxiaoyibing.github.io/baike-storm/examples/frontend-demo/">打开独立视频页</a></sub>
 
 ![凯里·欧文词条示例](examples/kyrie-demo/img/hero_3.jpg)
 
