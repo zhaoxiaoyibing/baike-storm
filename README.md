@@ -13,7 +13,7 @@
 ## 先看演示
 
 - [阅读凯里·欧文完整词条](https://zhaoxiaoyibing.github.io/baike-storm/examples/kyrie-demo/)
-- [在哔哩哔哩观看前端生成演示](https://www.bilibili.com/video/BV13kpz64EUp/)
+- [![在哔哩哔哩观看前端生成演示](https://img.shields.io/badge/Bilibili-%E8%A7%82%E7%9C%8B%E5%89%8D%E7%AB%AF%E7%94%9F%E6%88%90%E6%BC%94%E7%A4%BA-00A1D6?style=for-the-badge&logo=bilibili&logoColor=white)](https://www.bilibili.com/video/BV13kpz64EUp/)
 
 <video controls preload="metadata" poster="https://zhaoxiaoyibing.github.io/baike-storm/examples/kyrie-demo/img/hero_3.jpg" width="100%">
   <source src="https://zhaoxiaoyibing.github.io/baike-storm/examples/frontend-demo/baike-storm-kyrie-demo.mp4" type="video/mp4">
