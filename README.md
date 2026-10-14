@@ -2,7 +2,9 @@
 
 中文百科词条生成工具：通过多视角检索、两段式大纲和分节写作，输出可直接阅读的百科风格 HTML 页面。
 
-这是 [STORM](https://arxiv.org/abs/2402.14207) 的中文实现。LLM 网关、检索后端和评测 judge 均可替换；demo 模式可以离线跑通整条流水线。
+借鉴了 [STORM](https://arxiv.org/abs/2402.14207) 论文中的多视角调研和检索增强写作思路。
+
+LLM 网关、检索后端和评测 judge 均可替换；demo 模式可以离线跑通整条流水线。
 
 ## 流水线
 
@@ -53,7 +55,7 @@ baike-storm/
 │   ├── config.py               # 配置和路径解析
 │   ├── llm.py                  # OpenAI 兼容客户端和 MockLLM
 │   ├── search.py               # Tavily 和 mock 检索后端
-│   ├── storm_pipeline.py       # STORM 主流水线
+│   ├── storm_pipeline.py       # 内容生成流水线
 │   ├── prompts_storm.py        # 提示词模板
 │   ├── editorial.py            # 编辑指南解析
 │   ├── score.py                # LLM judge 和 entity_recall
@@ -128,7 +130,7 @@ cp .env.example .env
 ### 生成词条报告
 
 ```bash
-# 词条 + 视角数 N + 每个视角的提问数 M（STORM 默认 N=5、M=3）
+# 词条 + 视角数 N + 每个视角的提问数 M（默认 N=5、M=3）
 baike-storm run 问界M9 -n 5 -m 3
 
 # 启用配图（需要配置 FIG_VLM_*）

@@ -1,6 +1,6 @@
-# STORM 化 baike 重建 —— 实现计划
+# 借鉴 STORM 思路的百科重建设计计划
 
-> 目的:把 deep-research 式 baike 重建系统按 STORM(arXiv:2402.14207)改造,
+> 目的:借鉴 [STORM](https://arxiv.org/abs/2402.14207) 的多视角调研思路，改造 deep-research 式 baike 重建系统，
 > 补上"每节深度/事实召回不足"导致的长度与覆盖差距(问界M9:7758字 vs gold 14110字,
 > 覆盖度仅 78)。诊断已确认瓶颈是**深度**不是骨架。本计划在**新窗口**执行。
 
@@ -10,7 +10,7 @@
 3. 视角发现 **只靠 LLM 自身知识 + 现有线上大类 block**(editorial.get_dalei 的 block),
    **不**额外联网检索抓同类词条真实目录。
 
-## 二、STORM 四步 → 本项目映射(含落点文件)
+## 二、参考思路与本项目流程(含落点文件)
 - §3.1 多视角发现 → `discover_perspectives(title, dalei_block, n=5)`:LLM 读 大类 block + 自身知识,
   产出 N-1 个视角 persona + 固定 p0。每个 persona = {name, 关注侧面一句话}。
 - §3.2 模拟对话(深度引擎)→ `simulate_conversation(title, persona, m=3)`:
@@ -33,10 +33,10 @@
 - 新建 `prompts_storm.py`:放 5 段提示词(视角发现 / 写手提问 / 专家拆query / 专家综合作答 /
   草拟提纲 / 精修提纲 / 分节写作 / 去重 / 导语)。
 - 改 `score.py`:加覆盖率自动指标 `entity_recall`(见第四节)。
-- 新建 `exp_storm.py`:A/B = STORM 版 vs 现动态大纲版(复用 runs/问界M9_dynoutline 产物当对照),
+- 新建 `exp_storm.py`:A/B = 多视角调研版 vs 现动态大纲版(复用 runs/问界M9_dynoutline 产物当对照),
   judge 打分 + entity_recall,对比字数/节数/覆盖。score 必须在 agent 跑完后再 import。
 
-## 四、覆盖率自动指标(STORM §entity recall 的本地化)
+## 四、覆盖率自动指标(参考 STORM 的 entity recall)
 - gold json 已有 **`key_facts`** 字段 → 直接用它当"事实召回"基准,省去抽取。
 - `entity_recall = 命中的 key_facts 数 / key_facts 总数`;命中判定先用字符串/数字归一化包含,
   边界情况可用 LLM 判等(可选)。此指标直盯最弱的"事实覆盖度",也可做 §3.2 的停止准则。
@@ -55,7 +55,7 @@
 
 ## 六、A/B 验证(问界M9)
 - A 对照 = runs/问界M9_dynoutline(现动态版,7758字/83.7/覆盖78)。
-- B = STORM 版(N=5/M=3)。比:字数、## 节数、judge 总分与各维、**entity_recall**。
+- B = 多视角调研版(N=5/M=3)。比:字数、## 节数、judge 总分与各维、**entity_recall**。
 - 期望:字数向 gold(14110)靠拢,覆盖度(事实覆盖/entity_recall)明显上升,尤其补齐
   产品沿革编年史 + 事件/争议/文化(春晚)等长尾。
 - 跑完渲染 render_baike_html.py 出页面对比观感。
