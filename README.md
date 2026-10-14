@@ -4,12 +4,6 @@
 
 借鉴了 [STORM](https://arxiv.org/abs/2402.14207) 论文中的多视角调研和检索增强写作思路。
 
-## 流水线
-
-![baike-storm 流程：视角发现、多视角调研、两段式大纲、分节生成、后处理、页面渲染](docs/assets/storm-pipeline.svg)
-
-产物写入 `runs/<词条>_storm/`，包括 Markdown 正文、HTML 页面和调研、配图等中间文件。
-
 ## 先看演示
 
 - [阅读凯里·欧文完整词条](https://zhaoxiaoyibing.github.io/baike-storm/examples/kyrie-demo/)
@@ -25,6 +19,12 @@
 </a>
 
 <sub>点击截图可打开完整词条页面。</sub>
+
+## 流水线
+
+![baike-storm 流程：视角发现、多视角调研、两段式大纲、分节生成、后处理、页面渲染](docs/assets/storm-pipeline.svg)
+
+产物写入 `runs/<词条>_storm/`，包括 Markdown 正文、HTML 页面和调研、配图等中间文件。
 
 ## 特性
 
@@ -79,10 +79,14 @@ baike-storm/
 ### 安装
 
 ```bash
-git clone <your-fork> baike-storm
+git clone https://github.com/zhaoxiaoyibing/baike-storm.git
 cd baike-storm
-pip install -e .             # 或 pip install -e ".[all]"（含 tracing、judge 和 tests）
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e .
 ```
+
+以上虚拟环境激活命令适用于 macOS / Linux；Windows PowerShell 使用 `.\.venv\Scripts\Activate.ps1`。如需完整可选依赖，可安装 `python -m pip install -e ".[all]"`。
 
 ### 离线演示
 
@@ -106,16 +110,41 @@ figures.json      # 配图计划（默认为空）
 
 ### 配置真实服务
 
+在当前终端设置主 LLM 和 Tavily 凭据。请将下面的示例地址、密钥和模型名替换为服务商提供的实际值：
+
 ```bash
-cp .env.example .env
-# 按需填写，或直接 export 环境变量
+python -m pip install -e ".[search]"
+
+export STORM_LLM_BACKEND=openai
+export STORM_LLM_BASE_URL="https://api.example.com/v1"
+export STORM_LLM_API_KEY="your-llm-api-key"
+export STORM_LLM_MODEL="your-model-name"
+export STORM_SEARCH_BACKEND=tavily
+export TAVILY_API_KEY="your-tavily-api-key"
+
+# 首次尝试：2 个视角，每个视角 1 轮提问，关闭配图
+baike-storm run 凯里欧文 -n 2 -m 1 --no-figures
 ```
 
-| 变量 | 说明 |
-| --- | --- |
-| `STORM_LLM_BASE_URL` / `STORM_LLM_API_KEY` / `STORM_LLM_MODEL` | 主 LLM（OpenAI 兼容）；兼容旧变量 `OPENAI_*` 和 `RESEARCH_MODEL` |
-| `STORM_SEARCH_BACKEND=tavily` + `TAVILY_API_KEY` | Tavily 检索 |
-| `JUDGE_BASE_URL` / `JUDGE_API_KEY` / `JUDGE_MODEL` | `eval` 子命令使用的 judge |
+完成后，用浏览器打开 `runs/凯里欧文_storm/index.html`。在同一个终端执行 `baike-storm web --port 8765`，即可通过聊天页生成词条。
+
+也可以复制 `.env.example` 为 `.env` 后填写配置。程序**不会自动加载 `.env`**，macOS / Linux 用户需在运行前手动导出：
+
+```bash
+cp .env.example .env
+# 编辑 .env 并填写实际配置后执行
+set -a
+source .env
+set +a
+```
+
+`.env` 已被 Git 忽略，密钥请保留在本地。上述最小配置用于正文生成；配图需要另外设置 `FIG_VLM_BASE_URL`、`FIG_VLM_API_KEY` 和 `FIG_VLM_MODEL`，评测需要单独配置 judge，详见 [.env.example](.env.example)。
+
+### 运行时间与费用
+
+真实生成的耗时取决于模型响应速度、网络状况、视角数、提问轮数、章节数和是否启用配图。默认 `-n 5 -m 3` 最多包含 15 轮调研对话，另有大纲和写作调用；演示视频经过倍速处理，其时长不代表实际生成耗时。
+
+费用由所选服务商的模型 Token、检索调用和可选的图片模型调用计费决定，没有统一的单篇价格。建议先用 `-n 2 -m 1 --no-figures` 试跑，再结合服务商的用量记录增加调研深度。内置 mock 演示无需调用收费 API。
 
 ## 使用示例
 
@@ -174,6 +203,11 @@ baike-storm eval 嫦娥六号 path/to/report.md
 ```bash
 baike-storm render runs/问界M9_storm    # 重新生成 index.html
 ```
+
+## 使用边界
+
+- 生成内容和示例页面属于自动生成结果，事实、时效、引用与配图是否对应，需要在正式使用前人工核验；附带引用不等于事实已被确认。
+- 示例图片版权归原作者或权利人所有，引用来源不代表获得转载授权。对外发布或商业使用时，请确认内容和图片的使用权限。
 
 ## 测试
 
