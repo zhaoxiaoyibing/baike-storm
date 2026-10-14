@@ -1,21 +1,6 @@
-"""LLM-judge 评测器:给"从零重建的百科词条报告"打分。
+"""用 LLM 评审报告，并计算关键事实召回率。
 
-- 直接把 **生成的报告** 和 **参考答案原文(gold['full_text'])** 一起塞给强长上下文模型判分。
-- 固定 rubric + 数值分维度 + temperature=0,保证分数稳定可比。
-- 附带 entity_recall:报告对 gold['key_facts'] 的事实召回率(LLM 判等,可退词法)。
-
-⚠️ 防泄漏边界:"看 gold['full_text']"是 by design —— full_text 只给 judge 看,不进生成链路。
-   生成端的检索绝不能看参考答案本身。
-
-接口:
-    from baike_storm.score import score_report, load_gold, entity_recall
-    gold = load_gold("嫦娥六号")
-    result = score_report("嫦娥六号", report_md, gold)
-    # -> {"total", "dims", "dim_rationale", "rationale", "raw"}
-
-命令行:
-    baike-storm eval 嫦娥六号 [报告路径]
-    python -m baike_storm.score 嫦娥六号 [报告路径]
+参考答案仅供评审使用，不得进入生成端的检索链路。
 """
 
 import json
@@ -25,18 +10,13 @@ import sys
 
 from . import config
 
-# score 是纯 judge 调用,不需要 LangSmith 轨迹;关掉 tracing 免得上报超时刷屏。
+# 评测无需轨迹，关闭 tracing 以避免上报超时。
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 os.environ["LANGSMITH_TRACING"] = "false"
 
 GOLD_DIR = str(config.GOLD_DIR)
 BAIKE_DIR = str(config.PROJECT_ROOT)
 
-# ── judge 后端(可配置)────────────────────────────────────────────────────
-#   JUDGE_BACKEND=openai(默认):任意 OpenAI 兼容 chat/completions。
-#       JUDGE_BASE_URL / JUDGE_API_KEY / JUDGE_MODEL 或回退 OPENAI_* / RESEARCH_MODEL。
-#   JUDGE_BACKEND=anthropic:任意 Anthropic /v1/messages 兼容端点(需 pip install langchain-anthropic)。
-#       JUDGE_BASE_URL(或 ANTHROPIC_BASE_URL)/ ANTHROPIC_API_KEY / JUDGE_MODEL(或 ANTHROPIC_MODEL)。
 JUDGE_BACKEND = os.environ.get("JUDGE_BACKEND", "openai").strip().lower()
 
 
@@ -57,8 +37,7 @@ def _anthropic_token() -> str:
         )
     return token
 
-# ── 固定 rubric:5 个维度,各 0-100,带权重。改这里 = 改评分口径(自进化时保持不动才稳)。──
-# (name, 中文名, 权重, 评分说明)。权重和为 1.0;total = 加权和,落在 0-100。
+# 保持评分维度和权重稳定，便于比较不同版本。
 DIMENSIONS = [
     ("fact_coverage", "事实覆盖度", 0.30,
      "待评报告覆盖了参考答案里多少**关键事实点**(定义/时间/数字/参与方/结果)。"
@@ -82,7 +61,7 @@ _llm = None
 
 
 def _get_llm():
-    """懒加载 judge 模型(temperature=0 保稳定;端点/密钥全部走环境变量)。"""
+    """懒加载评审模型，配置从环境变量读取。"""
     global _llm
     if _llm is not None:
         return _llm
@@ -124,7 +103,7 @@ def _get_llm():
 
 
 def load_gold(title: str) -> dict:
-    """读 gold/{title}.json(优先精确文件名,退回按 title 字段匹配)。"""
+    """按文件名加载参考答案，未找到时按 title 字段匹配。"""
     path = os.path.join(GOLD_DIR, f"{title}.json")
     if os.path.exists(path):
         with open(path, encoding="utf-8") as f:
@@ -175,10 +154,7 @@ JUDGE_PROMPT = """你是一名严格、稳定的评审。任务:给一篇"从零
 
 
 def _content_text(resp) -> str:
-    """把 LLM 响应的 content 归一成纯文本。
-
-    OpenAI 后端返回 str;Anthropic 后端返回内容块列表([{'type':'text','text':...}, ...])。
-    """
+    """兼容字符串和内容块列表，将模型响应转成文本。"""
     content = getattr(resp, "content", resp)
     if isinstance(content, str):
         return content
@@ -194,7 +170,7 @@ def _content_text(resp) -> str:
 
 
 def _parse_json_obj(text: str) -> dict:
-    """从 LLM 输出里稳健地抠出 JSON 对象(去围栏 + 截取首个 { 到末个 })。"""
+    """去掉模型输出的围栏和外围文本，解析 JSON 对象。"""
     text = text.strip()
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.MULTILINE).strip()
     l, r = text.find("{"), text.rfind("}")
@@ -212,14 +188,9 @@ def _clamp(v) -> float:
 
 
 def score_report(title: str, report_md: str, gold: dict) -> dict:
-    """把 (agent 报告, gold['full_text'] 百科原文) 交给强长上下文 LLM-judge,返回结构化分数。
+    """对照参考答案评审报告。
 
-    Returns:
-        {"total": float(0-100),
-         "dims": {dim_key: float, ...},
-         "dim_rationale": {dim_key: str, ...},
-         "rationale": str,
-         "raw": <judge 原始 JSON>}
+    返回 total(0–100)、dims、dim_rationale、rationale 和评审原始 JSON raw。
     """
     full_text = gold.get("full_text") or gold.get("summary") or ""
     if not full_text:
@@ -253,9 +224,6 @@ def score_report(title: str, report_md: str, gold: dict) -> dict:
     }
 
 
-# ── 覆盖率自动指标:entity_recall(STORM §entity recall 本地化,见 STORM_PLAN §4)──
-# gold['key_facts'] 是人工/LLM 抽好的原子事实点列表,直接当"事实召回"基准。
-# 命中判定默认用 LLM 判等(整段 key_fact 做字符串包含不可靠);可用 ENTITY_RECALL_LLM=0 退回词法启发。
 ENTITY_RECALL_PROMPT = """判断一篇百科报告是否覆盖了下列"关键事实点"。
 
 对每一条事实点,判断【待评报告】是否**表达了相同的事实**(用词可不同,数字/时间/名称一致即算命中;
@@ -272,14 +240,14 @@ ENTITY_RECALL_PROMPT = """判断一篇百科报告是否覆盖了下列"关键�
 
 
 def _norm(s: str) -> str:
-    """归一化:去空白/标点、全角转半角、小写,便于字符串包含判定。"""
+    """归一化文本以便进行词法匹配。"""
     s = s.strip().lower()
     s = s.translate({ord(c): ord(c) - 0xFEE0 for c in s if "！" <= c <= "～"})
     return re.sub(r"[\s，。、；：（）()\[\]【】\"'“”‘’,.;:!?！？\-—_/]+", "", s)
 
 
 def _recall_lexical(report_md: str, facts: list[str]) -> list[bool]:
-    """词法兜底:事实点里的数字必须全部出现在报告,且非数字字符的重叠率 >= 0.6 视为命中。"""
+    """词法兜底：数字须全部出现，非数字文本的 bigram 命中率须至少为 0.6。"""
     rep_norm = _norm(report_md)
     rep_nums = set(re.findall(r"\d+(?:\.\d+)?", report_md))
     hits = []
@@ -299,9 +267,9 @@ def _recall_lexical(report_md: str, facts: list[str]) -> list[bool]:
 
 
 def entity_recall(report_md: str, gold: dict, use_llm: bool | None = None) -> dict:
-    """事实召回率 = 命中 key_facts 数 / key_facts 总数。
+    """计算 key_facts 召回率；默认用 LLM 判等，失败时退回词法匹配。
 
-    Returns: {"recall": float(0-1), "hits": int, "total": int, "per_fact": [{"fact","hit"}...]}
+    返回 recall(0–1)、hits、total 和 per_fact([{fact, hit}, ...])。
     """
     facts = gold.get("key_facts") or []
     if not facts:
@@ -335,7 +303,7 @@ def entity_recall(report_md: str, gold: dict, use_llm: bool | None = None) -> di
 
 
 def _find_report(title: str, explicit: str | None) -> str:
-    """定位待评报告:显式路径优先;否则 runs/{title}/final_report.md;再退回 runs/{title}*/。"""
+    """优先使用显式路径，否则在 runs/ 中按标题查找报告。"""
     if explicit:
         return explicit if os.path.isabs(explicit) else os.path.join(BAIKE_DIR, explicit)
     runs = os.path.join(BAIKE_DIR, "runs")

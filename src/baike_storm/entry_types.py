@@ -1,12 +1,8 @@
-"""词条类型分组:把 editorial 线上大类(~100 个)归到十几个"版式组"。
-
-信息栏字段(infobox.py)和配图版式(figures.py)都按组取配置,避免各自维护一份 100 类映射。
-大类缺失(route 不出)时按标题关键词兜底,再不行归 generic。
-"""
+"""将编辑指南中的大类归并为少量版式组。"""
 
 import re
 
-# 组 → 展示名
+# 分组名称用于展示和提示词。
 GROUP_LABELS = {
     "person": "人物", "org": "组织机构", "product": "产品", "software": "软件与网站",
     "work": "作品", "event": "事件与活动", "place": "地点与建筑", "organism": "生物",
@@ -36,7 +32,7 @@ _DALEI_GROUP = {
 }
 DALEI_TO_GROUP = {d: g for g, ds in _DALEI_GROUP.items() for d in ds}
 
-# 线上没有航天器大类(嫦娥六号会被路由到「仪器设备」),按标题兜底识别。
+# 编辑指南没有航天器类，按标题补充识别。
 _SPACE_RE = re.compile(r"(号|卫星|探测器|飞船|火箭|空间站|着陆器|月球车|火星车|望远镜)$|^(嫦娥|天问|神舟|天宫|天舟|长征|北斗)")
 
 

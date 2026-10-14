@@ -1,15 +1,4 @@
-"""线上编辑指南解析器 —— 词条大类 → 分节骨架 / 写作要点。
-
-把编辑指南 markdown(见 ``config.EDITORIAL_MD``,仓库自带 ``data/editorial_guidelines.example.md`` 格式)
-解析成 {大类名: {skeleton, block}}:
-- skeleton: "目录骨架(N 节)" 那行拆出的节名序列(list[str]);决定"查哪些节",是动态大纲的关键输入。
-- block:   该大类 `## 名` 到下一个 `## ` 之间的原始 markdown(含该大类内联的写作要点,若有)。
-            作为"写作要点参考"整段喂给 agent;要点在线上多集中于宽泛大类(作品/人物…),
-            不强行按节 join,交给 agent 自己对应。
-
-另提供 route_to_dalei(title):用标题在大类列表里选一个大类(**只吃标题**,不看百科)。
-拿不准返回 None → 调用方退回通用模板。指南文件不存在时同样返回 None(流水线仅少一个"同类参考"提示)。
-"""
+"""解析线上编辑指南，并按标题选择词条大类。"""
 
 from __future__ import annotations
 
@@ -25,27 +14,26 @@ _llm = None
 
 
 def _parse() -> dict[str, dict]:
-    """解析参考 md → {大类名: {"skeleton": [节名...], "block": 原始段落}}。"""
+    """解析参考 Markdown，返回各大类的章节骨架和原文块。"""
     ref = config.EDITORIAL_MD
     if not os.path.exists(ref):
         return {}
     with open(ref, encoding="utf-8") as f:
         text = f.read()
     lines = text.splitlines()
-    # 找所有 `## 大类` 的行号(跳过 `## 大类索引`)
+    # 索引标题本身不是可用的大类。
     heads = [(i, ln[3:].strip()) for i, ln in enumerate(lines)
              if ln.startswith("## ") and ln[3:].strip() != "大类索引"]
     out: dict[str, dict] = {}
     for idx, (lineno, name) in enumerate(heads):
         end = heads[idx + 1][0] if idx + 1 < len(heads) else len(lines)
         block = "\n".join(lines[lineno:end]).strip()
-        # 骨架行:**目录骨架(N 节)**:A → B → C
         skeleton: list[str] = []
         m = re.search(r"目录骨架.*?:\s*(.+)", block)
         if m:
             seq = m.group(1).strip()
             skeleton = [s.strip() for s in re.split(r"→|->|/", seq) if s.strip()]
-        # 大类名可能是逗号/顿号合并的多细类(如 "电影作品、动画作品"),拆开都登记,指向同一块
+        # 合并的大类名拆成别名，便于路由命中。
         for alias in re.split(r"[、,，]", name):
             alias = alias.strip()
             if alias:
@@ -61,7 +49,7 @@ def load_editorial() -> dict[str, dict]:
 
 
 def dalei_names() -> list[str]:
-    """去重后的规范大类名列表(用于分类提示)。"""
+    """返回去重后的规范大类名。"""
     seen, names = set(), []
     for v in load_editorial().values():
         c = v["canonical"]
@@ -85,7 +73,7 @@ def _get_llm():
 
 
 def route_to_dalei(title: str) -> str | None:
-    """用标题在大类里选一个;拿不准 / LLM 未配置 / 指南文件缺失 → 返回 None。"""
+    """根据标题选择大类；无法判断时返回 None。"""
     names = dalei_names()
     if not names or not llm_is_ready():
         return None

@@ -1,8 +1,4 @@
-"""信息栏(infobox):按词条类型组给建议字段 → LLM 从成文正文抽取 → 校验来源编号。
-
-值只从**正文**里抽(正文每个事实都已带 [n]),保证信息栏与正文口径一致、不引入未核实事实。
-产物 infobox.json = [{"k","v","refs"}];不进 markdown,score / entity_recall 不受影响。
-"""
+"""从正文抽取带来源编号的信息栏字段。"""
 
 import re
 from . import tracing as ls
@@ -37,7 +33,7 @@ MAX_VALUE_LEN = 60
 
 @ls.traceable(name="build_infobox")
 def build_infobox(title: str, dalei: str | None, article: str, llm, parse_json) -> dict:
-    """→ {"group","label","fields":[{k,v,refs}]}。llm(prompt)->str;parse_json(text, fallback)。"""
+    """返回 {group, label, fields:[{k,v,refs}]}，字段只取自正文。"""
     from . import prompts_storm as P
 
     group = type_group(title, dalei)

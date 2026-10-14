@@ -1,14 +1,4 @@
-"""配图(正式链路 + figure_probe 共用):VLM 打分 / 排版预算 / 从 SourceLib 取绑定候选。
-
-正式链路(storm_pipeline 成文后调用 illustrate):
-  1. 候选:每节正文引用到的 [n] 来源自带的 page_images(图跟着来源走,图注可直接链 [n]);
-     某槽位绑定候选不足 FIG_MIN_BOUND 张时,再补检索「词条 节名」。主图槽用导语引用源。
-  2. 规则粗筛:短边 ≥ MIN_SIDE、宽高比 0.5–2.2、跨槽位按图片 id 去重,每槽保留前 PER_SLOT 张。
-  3. VLM 打分(任选支持图片输入的 OpenAI 兼容端点,配置 FIG_VLM_BASE_URL/FIG_VLM_MODEL/FIG_VLM_API_KEY)。
-  4. pick_layout:1 张主图 + 节图 ≤ ceil(节数/2.5),相邻节不同时配图,同一画面主题只用一次,低于阈值宁缺。
-  产物:out_dir/img/*、figures.json(给 render_markdown 的 figures)、figures_detail.json(全部候选与打分)。
-  图片不写进 markdown,所以 score / entity_recall 不受影响。
-"""
+"""配图链路：候选筛选、VLM 评分与版式选择。"""
 
 import base64
 from contextvars import copy_context
@@ -26,15 +16,14 @@ import httpx
 
 from .render_baike_html import extract_preamble, parse_report
 
-# 图片下载代理(如公司出口代理);默认直连。
+# 图片下载代理；未配置时直连。
 FIG_PROXY = os.environ.get("FIG_PROXY") or None
-# VLM 后端:openai = 任意 OpenAI 兼容支持图片的 chat/completions(默认,需 FIG_VLM_API_KEY);
-# anthropic = 任意 Anthropic /v1/messages 兼容端点(需 JUDGE_API_KEY 等 token)。
-# 端点与模型名都不写默认值:参考 .env.example 配置。
+# VLM 后端支持 OpenAI chat/completions 和 Anthropic /v1/messages 兼容端点。
+# 端点、模型和远端服务的 key 通过环境变量配置。
 VLM_BACKEND = os.environ.get("FIG_VLM_BACKEND", "openai").strip().lower()
 VLM_MODEL = os.environ.get("FIG_VLM_MODEL", "").strip()
 VLM_BASE_URL = (os.environ.get("FIG_VLM_BASE_URL") or "").strip()
-# gemini flash 是推理型,先吃思考 token,400 会截断输出。
+# Gemini Flash 会先消耗思考 token，因此保留较大的输出上限。
 VLM_MAX_TOKENS = int(os.environ.get("FIG_VLM_MAX_TOKENS", "4000"))
 MIN_SIDE = int(os.environ.get("FIG_MIN_SIDE", "400"))
 PER_SLOT = int(os.environ.get("FIG_PER_SLOT", "8"))
@@ -47,12 +36,8 @@ DEFECT_PENALTY = {"watermark": 1.5, "low_quality": 2.0}
 CRED_RANK = {"high": 0, "medium": 1, "low": 2}
 SKIP_SECTIONS = ("参考资料", "概述", "参见", "外部链接", "延伸阅读")
 
-# ── 版式 profile:按词条类型组(entry_types.type_group)定主图偏好 / 配图密度 / 缺陷容忍度 ──
-# hero:   主图偏好(喂给 VLM 判 hero_ok;None = 该类不配主图,如抽象概念)
-# ratio:  节图预算 = ceil(章数 / ratio),越小配得越多
-# soft:   该类里不算硬伤、只扣分的缺陷(如软件的界面截图、作品的海报)
-# gallery:允许一章放 2 张不同画面的横排组图(产品/地点/生物等"看图识物"的类型)
-_BASE_SOFT = {"screenshot": 2.5}  # 截图默认只扣分:新闻配图常带字幕条/界面边,一刀切会误杀大半
+# 按词条类型控制主图偏好、配图密度和缺陷容忍度。
+_BASE_SOFT = {"screenshot": 2.5}  # 新闻图常带字幕条或界面边，截图默认只扣分。
 PROFILES = {
     "person":   {"hero": "本人清晰的单人肖像或工作照(正脸、主体完整;合影、背影不算)", "ratio": 3.5, "soft": {}, "gallery": False},
     "org":      {"hero": "机构标志性建筑/总部外景、或官方标志(logo)", "ratio": 3.0, "soft": {}, "gallery": False},
@@ -70,9 +55,9 @@ PROFILES = {
     "space":    {"hero": "航天器/火箭本体照片或官方渲染图(构型示意图也可)", "ratio": 2.5, "soft": {}, "gallery": False},
     "generic":  {"hero": "能直观展示词条本体的真实照片或官方图", "ratio": 3.0, "soft": {}, "gallery": False},
 }
-# 组图第二张需更高分,避免凑数
+# 第二张组图需要更高分，避免为了凑数重复配图。
 GALLERY_BONUS = 1.0
-# 通用本体照补位:fit 低(放哪节都行)但 entity 很高时,用这条以本体为主的分数线(见 _final_score)
+# fit 较低但本体相关性高的图片仍可作为通用本体照补位。
 GENERIC_W_FIT, GENERIC_W_ENT, GENERIC_OFFSET = 0.4, 0.6, 0.6
 
 
@@ -104,9 +89,9 @@ VLM_PROMPT = """你是百科词条的图片编辑。判断这张候选图能否�
 
 
 def vlm_ready() -> tuple[bool, str]:
-    """当前 VLM 配置能否调用(缺配置时正式链路跳过配图,而不是报错中断)。
+    """检查 VLM 配置；缺配置时跳过配图，避免中断正式链路。
 
-    本地服务(127.0.0.1/localhost)可免 key;否则需显式配置 FIG_VLM_BASE_URL/FIG_VLM_MODEL/FIG_VLM_API_KEY。
+    本地服务可免 key，远端服务需配置 FIG_VLM_API_KEY。
     """
     if not VLM_BASE_URL or not VLM_MODEL:
         return False, "未配置 FIG_VLM_BASE_URL / FIG_VLM_MODEL"
@@ -116,9 +101,9 @@ def vlm_ready() -> tuple[bool, str]:
     return True, VLM_MODEL
 
 
-# ── 候选 ─────────────────────────────────────────────────────────────────
+# 候选筛选。
 def _image_key(url: str) -> str:
-    """图床同一张图的稳定 id(u=xxx,yyy);取不到退回整串。"""
+    """提取图床参数作为稳定去重 id，取不到时使用完整 URL。"""
     m = re.search(r"[?&]u=([^&]+)", url)
     return m.group(1) if m else url
 
@@ -129,7 +114,7 @@ def _size_ok(w: int, h: int) -> bool:
 
 @ls.traceable(name="image_search", run_type="tool")
 def search_with_images(query: str) -> list[dict]:
-    """走统一搜索后端,但保留页面图片(按检索排序返回)。"""
+    """通过统一搜索后端获取按检索排序的页面图片。"""
     from . import search
 
     results = search.search(query, top_k=40, with_images=True)
@@ -146,7 +131,7 @@ def clean_snippet(text: str, n: int = 220) -> str:
     text = re.sub(r"\[\d+\]", "", text)
     text = re.sub(r"[#*>|`-]", " ", text)
     return re.sub(r"\s+", " ", text).strip()[:n]
-# ── 下载 + VLM 打分 ──────────────────────────────────────────────────────
+# 下载图片并调用 VLM 评分。
 _dl = httpx.Client(proxy=FIG_PROXY, headers=UA, timeout=15, follow_redirects=True)
 _vlm_http = httpx.Client(trust_env=False, timeout=120)
 _vlm = None
@@ -199,7 +184,7 @@ def _vlm_ask(prompt: str, img: bytes, media_type: str) -> str:
     return "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
 @ls.traceable(name="score_image_candidate")
 def score_candidate(title: str, slot: dict, c: dict, img_dir: str, idx: int, cached: str | None = None) -> None:
-    """下载 → 存 img_dir → VLM 打分,结果写回 c。cached = 已下载好的本地图片(换 VLM 重打分时复用)。"""
+    """下载并缓存候选图，调用 VLM 评分后写回 c；cached 用于复用已下载图片。"""
     if cached:
         with open(cached, "rb") as f:
             content = f.read()
@@ -242,18 +227,14 @@ def score_candidate(title: str, slot: dict, c: dict, img_dir: str, idx: int, cac
 
 
 def _penalty(defects: list[str], prof: dict) -> float:
-    """硬伤 -10;软缺陷按 DEFECT_PENALTY + 截图默认扣分 + 该类 profile 的 soft 覆盖。"""
+    """合并 profile 的缺陷权重；硬伤直接大幅降低候选分数。"""
     pen = {**DEFECT_PENALTY, **_BASE_SOFT, **(prof.get("soft") or {})}
     hard = HARD_DEFECTS - set(pen)
     return sum(pen.get(d, 0) for d in defects) + (10 if hard & set(defects) else 0)
 
 
 def _final_score(fit: float, entity: float, penalty: float) -> float:
-    """节图分 = 两条线取高:
-    - 切节线 0.7·fit + 0.3·entity:表现该节特有内容的图;
-    - 本体线 0.4·fit + 0.6·entity − 0.6:高质量的词条本体照(fit 被提示词压到 ≤4),给它补位的机会。
-    旧版只有切节线,本体照最高 0.7·4+0.3·10=5.8 < 阈值 6,永远过不了。
-    """
+    """两种权重取高，避免本体照因章节匹配度低而始终无法入选。"""
     return max(0.7 * fit + 0.3 * entity, GENERIC_W_FIT * fit + GENERIC_W_ENT * entity - GENERIC_OFFSET) - penalty
 
 
@@ -268,7 +249,7 @@ def _apply_score(c: dict, prof: dict) -> None:
              role="hero" if hero_ok else ("section" if final >= ACCEPT else "none"))
 
 
-# ── 排版预算 ─────────────────────────────────────────────────────────────
+# 计算配图预算并选择版式。
 _STOP_BG = set("的了和与及或在是对为之其该等这那被把图中")
 
 
@@ -278,10 +259,7 @@ def _bigrams(s: str) -> set[str]:
 
 
 def _relocate(sec_slots: list[dict]) -> None:
-    """图跟着来源走,会被分到"引用它的那一章",但画面可能更贴另一章(如返回器开舱照落在「任务概况」)。
-    对无硬伤、本体分高的图,用图注/画面描述与各章正文的 bigram 重叠找最贴的章;明显更贴就改放过去。
-    写回 c["place"](章下标)与 c["place_score"](按改放后估计的 fit 重算的分)。
-    """
+    """候选图默认归入引用章节；若图注和画面描述与其他章节更匹配，则调整归属。"""
     slot_bg = [_bigrams(s.get("text") or s.get("snippet") or "") for s in sec_slots]
     for i, s in enumerate(sec_slots):
         for c in s["cands"]:
@@ -294,17 +272,16 @@ def _relocate(sec_slots: list[dict]) -> None:
             ov = [len(anchor & bg) / len(anchor) for bg in slot_bg]
             j = max(range(len(ov)), key=lambda k: ov[k])
             if j != i and ov[j] >= 0.3 and ov[j] - ov[i] >= 0.15:
-                fit_est = min(8.0, 3.0 + 10 * ov[j])  # 正文里能找到图上画的东西 → 视作较好的切节
+                fit_est = min(8.0, 3.0 + 10 * ov[j])  # 正文提到画面内容时，提高章节匹配度。
                 alt = _final_score(fit_est, c["entity"], c["penalty"])
                 if alt > c["place_score"]:
                     c["place"], c["place_score"], c["relocated"] = j, round(alt, 1), sec_slots[j]["label"]
 
 
 def pick_layout(slots: list[dict], prof: dict | None = None) -> None:
-    """1 张主图 + 节图不超过 ceil(章数/ratio);同一画面主题(subject)只用一次;低于阈值宁缺。
+    """按 profile 选择主图和章节配图，限制预算并去重画面主题；低于阈值时留空。
 
-    slots[0] 是主图槽,其余是节槽。主图从所有槽位的候选里挑(hero_ok 且本体分最高;profile.hero=None 不配主图)。
-    profile.gallery=True 的类型允许最多 2 章各放第二张(不同画面)做横排组图。
+    slots[0] 是主图槽；gallery profile 允许章节追加第二张不同主题的图片。
     """
     prof = prof or PROFILES["generic"]
     used_keys, used_subjects = set(), set()
@@ -312,11 +289,11 @@ def pick_layout(slots: list[dict], prof: dict | None = None) -> None:
     def take(c, label):
         c["picked"], c["picked_as"] = True, label
         used_keys.add(c["key"])
-        # 组图类(产品/地点等)主图不占 subject:「外观/设计」章再放一张外观照不算重复;人物再放一张肖像就重复了
+        # 组图类主图不占 subject，允许后续章节补充同类画面。
         if c.get("subject") and not (label == "主图" and prof.get("gallery")):
             used_subjects.add(c["subject"])
 
-    def same_subject(a, b):  # 「样品」≈「月球样品」、「演讲现场」≈「现场演讲」
+    def same_subject(a, b):  # 将相近主题视为重复，避免画面雷同。
         if a in b or b in a:
             return True
         ga, gb = _bigrams(a), _bigrams(b)
@@ -357,11 +334,7 @@ def pick_layout(slots: list[dict], prof: dict | None = None) -> None:
 
 
 def figures_from_slots(slots: list[dict], prefix: str = "") -> dict:
-    """入选图 → render_markdown 的 figures 参数。prefix 加在 img/ 相对路径前(web iframe 用)。
-
-    sections[章名] 是单张 fig;组图(gallery)时是 [fig, fig]。
-    fig["anchor"] = 图注 + 画面描述,渲染时据此把图放到最相关的段落旁。
-    """
+    """返回 {hero, sections}；组图用列表表示，prefix 加到图片路径前。"""
     figures = {"hero": None, "sections": {}}
     for s in slots:
         for c in sorted(s["cands"], key=lambda c: -c.get("place_score", c.get("final", -1))):
@@ -381,7 +354,7 @@ def figures_from_slots(slots: list[dict], prefix: str = "") -> dict:
 
 
 def prefix_figures(figures: dict, prefix: str) -> dict:
-    """给已有 figures 的图片路径统一加前缀(不改原对象)。"""
+    """给已有 figures 的图片路径统一加前缀，不修改原对象。"""
     def p(f):
         if isinstance(f, list):
             return [p(x) for x in f]
@@ -391,9 +364,9 @@ def prefix_figures(figures: dict, prefix: str) -> dict:
     if figures.get("blocks"):
         out["blocks"] = [{**b, "figs": p(b["figs"])} for b in figures["blocks"]]
     return out
-# ── 正式链路:从 SourceLib 取绑定候选 → 打分 → 排版 ───────────────────────
+# 正式链路：从 SourceLib 获取候选，评分后排版。
 def _ids(text: str) -> list[int]:
-    """正文里的 [n] 引用,按首次出现保序去重。"""
+    """按首次出现顺序提取并去重正文引用，保持候选绑定顺序。"""
     seen, out = set(), []
     for x in re.findall(r"\[(\d+)\]", text):
         n = int(x)
@@ -442,7 +415,7 @@ def _search_cands(query: str, seen: set, cited_urls: set) -> list[dict]:
 
 
 def build_bound_slots(report_md: str, R, supplement: bool = True) -> tuple[str, list[dict]]:
-    """主图槽 + 每节一槽;候选优先取该节引用源的图,不足 MIN_BOUND 张再补检索。"""
+    """按章节建立配图槽，优先使用引用来源图片，不足时再补检索。"""
     title, sections, _ = parse_report(report_md)
     preamble = extract_preamble(report_md)
     cited_urls = {R.get(i)["url"] for i in _ids(report_md) if R.get(i)}
@@ -453,7 +426,7 @@ def build_bound_slots(report_md: str, R, supplement: bool = True) -> tuple[str, 
         sec_slots.append({"slot": f"sec{len(sec_slots) + 1}", "label": sec, "query": f"{title} {sec}",
                           "slot_desc": f"「{sec}」一节的插图", "snippet": clean_snippet(body), "ids": _ids(body),
                           "text": re.sub(r"\[\d+\]", "", body)})
-    # 主图槽:导语引用源;导语没引用则取全文被引最多的几条源。
+    # 主图优先使用导语引用源；导语无引用时回退到全文高频来源。
     hero_ids = _ids(preamble)
     if len(hero_ids) < 2:
         freq = {}
@@ -472,15 +445,12 @@ def build_bound_slots(report_md: str, R, supplement: bool = True) -> tuple[str, 
             pool += _search_cands(s["query"], seen, cited_urls)
         s["n_bound"], s["n_pool"] = n_bound, len(pool)
         s["cands"] = pool[:PER_SLOT]
-        # 没送审的候选退回去重集合,给后面的槽位用
+        # 未送审候选留给后续槽位。
         for c in pool[PER_SLOT:]:
             seen.discard(c["key"])
     return title, [hero] + sec_slots
 def score_slots(title: str, slots: list[dict], img_dir: str, emit=None, cached: dict | None = None) -> None:
-    """并发打分全部候选。emit(done, total) 在调用线程里回调(web 进度 / 取消检查都靠它)。
-
-    cached: {id(c): 本地图片路径},换 VLM 重打分时复用已下载的图。
-    """
+    """并发调用 VLM 评分候选；emit 用于上报进度和取消检查，cached 用于复用本地图片。"""
     os.makedirs(img_dir, exist_ok=True)
     jobs = [(s, c, i) for s in slots for i, c in enumerate(s["cands"])
             if cached is None or cached.get(id(c))]
@@ -493,19 +463,16 @@ def score_slots(title: str, slots: list[dict], img_dir: str, emit=None, cached: 
             if emit:
                 emit(done, len(futs))
     finally:
-        # 取消(emit 抛异常)时不等剩余图片打完
+        # 取消时不等待剩余图片完成。
         ex.shutdown(wait=False, cancel_futures=True)
 
 
 @ls.traceable(name="illustrate")
 def illustrate(report_md: str, R, out_dir: str, emit=None, supplement: bool = True, dalei: str | None = None,
                llm=None, llm_model: str = "") -> dict:
-    """给成文报告挑图。返回 figures(src 为相对 out_dir 的 img/...),并落 figures.json / figures_detail.json。
+    """为成文报告选图并写入 figures.json、figures_detail.json。
 
-    emit(kind, **data):可选事件回调(storm_pipeline._emit)。
-    dalei:词条大类,决定版式 profile(主图偏好 / 配图密度 / 缺陷容忍度 / 是否组图)。
-    llm(prompt)->str:给了就用 skills/figure-layout 做版面规划(选主图 + 段落级锚点 + 嵌入方式/尺寸 + 图注);
-      不给或规划失败 → 规则排版 pick_layout。
+    返回 figures，图片路径相对 out_dir。传入 llm 时尝试版面规划，失败则退回规则排版。
     """
     from .entry_types import GROUP_LABELS
 
@@ -523,7 +490,7 @@ def illustrate(report_md: str, R, out_dir: str, emit=None, supplement: bool = Tr
     last = [0.0]
 
     def progress(done, total):
-        if done == total or time.time() - last[0] > 2:  # 限频,免得刷屏
+        if done == total or time.time() - last[0] > 2:  # 限频，避免日志刷屏。
             last[0] = time.time()
             emit("figures_progress", done=done, total=total)
 
@@ -533,7 +500,7 @@ def illustrate(report_md: str, R, out_dir: str, emit=None, supplement: bool = Tr
 
 
 def _picks_from_figures(figures: dict, slots: list[dict]) -> list[dict]:
-    """figures → figures_done 事件里的 picks(web 日志卡片用)。"""
+    """将 figures 转为 figures_done 事件使用的 picks。"""
     by_file = {c["file"]: c for s in slots for c in s["cands"] if c.get("file")}
     out = []
 
@@ -558,10 +525,7 @@ def _picks_from_figures(figures: dict, slots: list[dict]) -> list[dict]:
 
 def _finish(title, slots, out_dir, prof, group, n_cands, t0, emit, report_md=None, dalei=None,
             llm=None, llm_model="") -> dict:
-    """排版 → 落盘 figures.json / figures_detail.json → figures_done 事件。
-
-    先跑规则排版 pick_layout(结果留在 detail 里做对照 / 兜底);有 llm 时再跑 skill 版面规划,成功则以它为准。
-    """
+    """先保留规则排版作为对照和兜底，LLM 规划成功后采用其结果。"""
     from .entry_types import GROUP_LABELS
 
     pick_layout(slots, prof)
@@ -600,10 +564,7 @@ def _finish(title, slots, out_dir, prof, group, n_cands, t0, emit, report_md=Non
 
 
 def relayout(run_dir: str, dalei: str | None = None, llm=None, llm_model: str = "") -> dict:
-    """不重新下载/调 VLM:用 figures_detail.json 里的旧打分 + 新 profile 重算分数与排版(调参用)。
-
-    llm 给了就同时重跑 skill 版面规划。
-    """
+    """复用旧评分，按新 profile 重排；传入 llm 时同时重跑版面规划。"""
     with open(os.path.join(run_dir, "figures_detail.json"), encoding="utf-8") as f:
         d = json.load(f)
     with open(os.path.join(run_dir, "final_report.md"), encoding="utf-8") as f:
@@ -627,7 +588,7 @@ def relayout(run_dir: str, dalei: str | None = None, llm=None, llm_model: str = 
 
 
 class _SavedSources:
-    """storm_pipeline 落盘的 sources.json → 与 SourceLib 同接口的只读 get(sid)。"""
+    """把 sources.json 适配为 SourceLib 风格的只读 get。"""
 
     def __init__(self, sources: list[dict]):
         self._by_id = {s["id"]: s for s in sources}
@@ -646,14 +607,14 @@ def _route_dalei(run_dir: str) -> str | None:
 
 
 def _pipeline_llm():
-    """复用流水线的 LLM 客户端(仅当需要 skill 版面规划时)。返回 (llm, model_name)。"""
+    """复用流水线的 LLM 客户端，仅用于版面规划。"""
     from . import storm_pipeline as SP
 
     return SP._llm, SP.pipeline_client().model_name
 
 
 def main_relayout(run_dir: str, plan: bool = False) -> dict:
-    """离线重排 + 渲染 index.html。plan=True 时重跑 skill 版面规划(调 LLM,不调 VLM)。"""
+    """离线重排并渲染 index.html；plan=True 时额外调用 LLM 规划版面。"""
     llm, name = _pipeline_llm() if plan else (None, "")
     figs = relayout(run_dir, _route_dalei(run_dir), llm=llm, llm_model=name)
     from .render_baike_html import render
@@ -663,10 +624,7 @@ def main_relayout(run_dir: str, plan: bool = False) -> dict:
 
 
 if __name__ == "__main__":
-    # 离线重配图:python figures.py runs/嫦娥六号_storm_web                 (需 final_report.md + sources.json,调 VLM)
-    #           python figures.py runs/嫦娥六号_storm_web --relayout        (只用旧打分按新 profile 重排,不调 VLM)
-    #           python figures.py runs/嫦娥六号_storm_web --relayout --plan (再加 skill 版面规划,调 LLM)
-    #  加 --plan 时首次配图也会做版面规划。
+    # --relayout 复用已有评分，--plan 额外调用 LLM 规划版面。
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     run_dir = os.path.abspath(args[0]) if args else sys.exit("用法: figures.py <run_dir> [--relayout] [--plan]")
     want_plan = "--plan" in sys.argv

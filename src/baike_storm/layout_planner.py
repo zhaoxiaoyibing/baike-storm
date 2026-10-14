@@ -1,17 +1,5 @@
 # -*- coding: utf-8 -*-
-"""图文版面规划(skills/figure-layout/SKILL.md 的执行器)。
-
-输入:figures.py 打完分的候选槽位 + 成文 markdown。
-流程:
-  1. 把正文按 render_baike_html 的段落切法编号(c章p段),附小节名/字数/环绕可用字数;
-  2. 从全部槽位里收合格候选(VLM 已审,无硬伤,过线),附朝向/尺寸/画面描述/词法匹配段落提示;
-  3. SKILL.md 正文 + 本次任务简报 → LLM → JSON 版面方案;
-  4. 校验修正(id/段落存在、mode 与朝向/张数、尺寸与原图/环绕文字、间距、每章上限、subject 去重、图注不编数字);
-  5. 产出 figures = {"hero", "blocks":[{chapter, para, mode, size, figs, why}], "sections"(兼容旧版), "planner"}。
-LLM 失败或方案为空时返回 None,调用方退回规则排版(figures.pick_layout)。
-
-离线重排(不调 VLM,只调 LLM):python layout_planner.py runs/<dir>
-"""
+"""根据候选图片和正文生成版面方案。"""
 
 import html as _html
 import json
@@ -29,15 +17,15 @@ from . import config as _cfg
 SKILL_PATH = str(_cfg.FIGURE_SKILL_MD)
 
 MAX_CANDS = int(os.environ.get("FIG_PLAN_MAX_CANDS", "36"))
-CHARS_PER_FIG = float(os.environ.get("FIG_PLAN_CHARS_PER_FIG", "500"))  # × profile.ratio = 每图块对应正文字数(人物≈1750)
-CHARS_PER_CH_BLOCK = 1500     # 章内每多这么多字,该章多允许一个图块(最多 3)
-DUP_DEPICTS = 0.45             # subject 相关时,画面描述 bigram 重叠≥此值算同一画面
-DUP_DEPICTS_HARD = 0.6         # 不论 subject,画面描述重叠≥此值算同一画面
-MIN_GAP = 3                    # 同章两个图块之间至少隔几段
+CHARS_PER_FIG = float(os.environ.get("FIG_PLAN_CHARS_PER_FIG", "500"))
+CHARS_PER_CH_BLOCK = 1500
+DUP_DEPICTS = 0.45
+DUP_DEPICTS_HARD = 0.6
+MIN_GAP = 3
 CAPTION_MAX = 36
 SIDE_WIDTH = {"s": 220, "m": 280, "l": 340}
-SIDE_MIN_RUN = {"s": 250, "m": 400, "l": 550}  # 侧栏图需要的环绕文字(字)
-FIRST_CH_SIDE_MIN_PARA = 5     # 第 0 章紧挨信息栏:侧栏图至少放到第几段之后
+SIDE_MIN_RUN = {"s": 250, "m": 400, "l": 550}
+FIRST_CH_SIDE_MIN_PARA = 5  # 避开首章附近的信息栏。
 MODES = {"side": 1, "side-left": 1, "wide": 1, "pair": 2, "trio": 3}
 SKIP_CHAPTERS = ("参考资料", "概述", "参见", "外部链接", "延伸阅读")
 
@@ -45,9 +33,8 @@ _HEAD_P_RE = re.compile(r"<h([34])[^>]*>(.*?)</h\1>|<p>(.*?)</p>", re.S)
 _TAG_RE = re.compile(r"<[^>]+>")
 
 
-# ── skill ────────────────────────────────────────────────────────────────
 def load_skill(path: str = SKILL_PATH) -> tuple[dict, str]:
-    """→ (frontmatter dict, 正文)。frontmatter 只取 name/description 两个简单键。"""
+    """读取 skill 文件，返回元数据和正文。"""
     with open(path, encoding="utf-8") as f:
         text = f.read()
     meta, body = {}, text
@@ -61,16 +48,12 @@ def load_skill(path: str = SKILL_PATH) -> tuple[dict, str]:
     return meta, body.strip()
 
 
-# ── 正文段落编号(与 render_baike_html 插图时的 <p> 顺序一致)──────────────
 def _plain(h: str) -> str:
     return re.sub(r"\[\d+\]", "", _html.unescape(_TAG_RE.sub("", h))).strip()
 
 
 def paragraph_index(report_md: str) -> tuple[str, list[dict]]:
-    """→ (title, chapters)。chapter = {i, title, skip, chars, paras:[{id,k,sub,text,chars,run,last}]}。
-
-    run = 本段起到所在小节结束的正文字数(侧栏浮动图能被多少文字环绕)。
-    """
+    """按渲染器的段落顺序编号；run 是从本段到小节末的环绕文字总数。"""
     title, sections, _ = parse_report(report_md)
     chapters = []
     for i, (t, body) in enumerate(sections):
@@ -93,7 +76,6 @@ def paragraph_index(report_md: str) -> tuple[str, list[dict]]:
     return title, chapters
 
 
-# ── 候选 ─────────────────────────────────────────────────────────────────
 _STOP_BG = set("的了和与及或在是对为之其该等这那被把图中")
 
 
@@ -108,7 +90,7 @@ def _orient(w: int, h: int) -> tuple[float, str]:
 
 
 def collect_candidates(slots: list[dict], accept: float, title: str, chapters: list[dict]) -> list[dict]:
-    """合格候选(已审、已下载、无硬伤、节图分或主图分过线附近),按质量取前 MAX_CANDS,编号 F1..。"""
+    """筛出合格候选，按质量取前 MAX_CANDS。"""
     label_to_ch = {c["title"]: c["i"] for c in chapters}
     pool, seen = [], set()
     for s in slots:
@@ -137,8 +119,7 @@ def collect_candidates(slots: list[dict], accept: float, title: str, chapters: l
                     "hero_score": c.get("hero_score", -1),
                     "soft": [d for d in c.get("defects") or []],
                     "from_ch": label_to_ch.get(s.get("label")), "hints": hints})
-    # 去重用的画面指纹:depicts 的 bigram 去掉词条名和「几乎每张图都有」的词(人名、车型名、球衣…),
-    # 否则同一人物的不同照片会因共享这些词被误判为同一画面
+    # 去掉标题和高频词，避免同一人物的不同照片被误判为重复。
     dbg = [_bigrams(c["depicts"]) - title_bg for c in out]
     df = {}
     for g in dbg:
@@ -151,14 +132,13 @@ def collect_candidates(slots: list[dict], accept: float, title: str, chapters: l
 
 
 def budget(chapters: list[dict], prof: dict, n_cands: int) -> tuple[int, dict]:
-    """→ (全文图块上限, {章下标: 该章上限})。按正文字数而不是章数定预算,长章可放多块。"""
+    """按正文长度计算全文和分章图块上限。"""
     total = sum(c["chars"] for c in chapters if not c["skip"])
     max_blocks = min(n_cands, max(1, math.ceil(total / (CHARS_PER_FIG * prof.get("ratio", 3.0)))))
     per_ch = {c["i"]: (0 if c["skip"] else min(3, 1 + c["chars"] // CHARS_PER_CH_BLOCK)) for c in chapters}
     return max_blocks, per_ch
 
 
-# ── 简报 ─────────────────────────────────────────────────────────────────
 def build_brief(title: str, type_label: str, prof: dict, chapters: list[dict], cands: list[dict],
                 max_blocks: int, per_ch: dict) -> str:
     lines = [f"# 本次任务输入", f"词条:{title}(类型:{type_label})",
@@ -188,7 +168,6 @@ def build_brief(title: str, type_label: str, prof: dict, chapters: list[dict], c
     return "\n".join(lines)
 
 
-# ── 解析 / 校验 ──────────────────────────────────────────────────────────
 def _parse_obj(text: str):
     t = re.sub(r"^```(?:json)?\s*|\s*```$", "", (text or "").strip(), flags=re.M)
     l, r = t.find("{"), t.rfind("}")
@@ -202,7 +181,7 @@ def _parse_obj(text: str):
 
 
 def _caption(proposed, cand: dict, para_text: str) -> str:
-    """LLM 改写的图注:超长 / 出现画面与锚点段都没有的数字 → 退回 VLM 原图注。"""
+    """校验模型图注，失败时使用 VLM 原图注。"""
     base = cand["caption"] or cand["depicts"][:CAPTION_MAX]
     cap = re.sub(r"\s+", " ", str(proposed or "")).strip().rstrip("。")
     if not cap or len(cap) > CAPTION_MAX:
@@ -225,12 +204,7 @@ def _same_subject(a: str, b: str) -> bool:
 
 
 def _dup(x: dict, y: dict) -> bool:
-    """两张候选是否「同一画面」(同场景/同动作/同角度)。
-
-    subject 是 VLM 的粗分类(人物肖像/外观/演讲…),只比它会把「太空服照」和「半身肖像」误判成重复,
-    所以主要看画面指纹 dbg(depicts 去掉词条名和各图公共词后的 bigram):
-    几乎一样 → 重复;subject 相关且指纹较像 → 重复。更细的「同类泛泛图只用一张」交给 LLM(见 SKILL)。
-    """
+    """用画面指纹辅助主题比较，避免不同照片仅因主题相同被判为重复。"""
     related = _same_subject(x["subject"], y["subject"]) or _overlap(x["subject"], y["subject"]) > 0
     if not x["depicts"] or not y["depicts"]:
         return related
@@ -242,7 +216,7 @@ def _dup(x: dict, y: dict) -> bool:
 
 
 def _fit_side_size(size: str, p: dict, w: int) -> str | None:
-    """侧栏图:按环绕文字和原图宽度降级尺寸;连 s 都不够返回 None。"""
+    """按环绕文字和原图宽度选择侧栏尺寸。"""
     order = ["l", "m", "s"]
     for s in order[order.index(size) if size in order else 1:]:
         if p["run"] >= SIDE_MIN_RUN[s] and w >= SIDE_WIDTH[s] * 0.9:
@@ -252,10 +226,10 @@ def _fit_side_size(size: str, p: dict, w: int) -> str | None:
 
 def validate(plan: dict, cands: list[dict], chapters: list[dict], prof: dict,
              max_blocks: int, per_ch: dict) -> tuple[dict | None, list[dict], list[str]]:
-    """→ (hero_cand+caption, blocks, warnings)。blocks 里 figs 是 (cand, caption)。"""
+    """返回 (主图候选及图注, 图块, 警告)；图块中的 figs 为 (候选, 图注) 对。"""
     by_id = {c["id"]: c for c in cands}
     para = {p["id"]: (ch, p) for ch in chapters if not ch["skip"] for p in ch["paras"]}
-    warn, used, used_subj = [], set(), []  # used_subj: 已占用的候选(去重比较用)
+    warn, used, used_subj = [], set(), []
     gallery = bool(prof.get("gallery"))
 
     hero = None
@@ -268,7 +242,7 @@ def validate(plan: dict, cands: list[dict], chapters: list[dict], prof: dict,
             used_subj.append(c)
         else:
             warn.append(f"主图 {h.get('id')} 无效(不存在或非 hero_ok),改为不设")
-    if hero is None and prof.get("hero"):  # LLM 漏选:取主图分最高的 hero_ok
+    if hero is None and prof.get("hero"):
         best = max((c for c in cands if c["hero_ok"]), key=lambda c: c["hero_score"], default=None)
         if best:
             hero = {"cand": best, "caption": best["caption"]}
@@ -290,7 +264,7 @@ def validate(plan: dict, cands: list[dict], chapters: list[dict], prof: dict,
             c = by_id.get(str((f or {}).get("id")))
             if not c or c["id"] in used or any(c is x for x, _ in figs):
                 continue
-            # 同一画面(含主图、其他图块、本图块内)只用一次;同对象不同角度不算重复
+            # 同一画面只使用一次；同对象的不同角度可保留。
             if any(_dup(c, o) for o in used_subj + [x for x, _ in figs]):
                 warn.append(f"{c['id']} 与已用图画面重复「{c['subject']}」,丢弃")
                 continue
@@ -299,7 +273,6 @@ def validate(plan: dict, cands: list[dict], chapters: list[dict], prof: dict,
             continue
         mode = str(b.get("mode") or "")
         size = str(b.get("size") or "m")
-        # 张数与 mode 对齐
         if mode == "trio" and not gallery:
             mode = "pair"
         if mode not in MODES or len(figs) != MODES[mode]:
@@ -311,7 +284,7 @@ def validate(plan: dict, cands: list[dict], chapters: list[dict], prof: dict,
                 mode = "wide" if figs[0][0]["ratio"] >= 1.3 and figs[0][0]["w"] >= 800 else "side"
         if mode in ("pair", "trio"):
             ori = {c["ori"] == "横" for c, _ in figs}
-            if len(ori) > 1:  # 朝向不一致不能等高并排 → 只留第一张
+            if len(ori) > 1:
                 warn.append(f"{aid} 组图朝向不一致,拆成单图")
                 figs = figs[:1]
                 mode = "wide" if figs[0][0]["ratio"] >= 1.3 and figs[0][0]["w"] >= 800 else "side"
@@ -322,7 +295,7 @@ def validate(plan: dict, cands: list[dict], chapters: list[dict], prof: dict,
             else:
                 size = "l" if size == "l" and c0["w"] >= 1000 else "m"
         if mode in ("side", "side-left"):
-            if ch["i"] == 0 and p["k"] < FIRST_CH_SIDE_MIN_PARA:  # 紧挨信息栏
+            if ch["i"] == 0 and p["k"] < FIRST_CH_SIDE_MIN_PARA:
                 if c0["ratio"] >= 1.2 and c0["w"] >= 800:
                     mode, size = "wide", "m"
                 elif len(ch["paras"]) > FIRST_CH_SIDE_MIN_PARA:
@@ -339,7 +312,7 @@ def validate(plan: dict, cands: list[dict], chapters: list[dict], prof: dict,
                     if c0["ratio"] >= 1.3 and c0["w"] >= 800:
                         mode, size = "wide", "m"
                     else:
-                        size = "s"  # 环绕文字不足:最小尺寸,渲染时下一小节标题 clear
+                        size = "s"
                 else:
                     size = fitted
         if mode in ("pair", "trio"):
@@ -351,7 +324,6 @@ def validate(plan: dict, cands: list[dict], chapters: list[dict], prof: dict,
             used.add(c["id"])
             used_subj.append(c)
 
-    # 每章上限 + 间距 + 全文上限:按质量保留
     kept = []
     for b in sorted(blocks, key=lambda b: -b["score"]):
         same = [x for x in kept if x["ch"]["i"] == b["ch"]["i"]]
@@ -366,14 +338,12 @@ def validate(plan: dict, cands: list[dict], chapters: list[dict], prof: dict,
             continue
         kept.append(b)
     kept.sort(key=lambda b: (b["ch"]["i"], b["p"]["k"]))
-    # 同章连续两个右浮 → 后一个改左浮,形成交替
     for a, b in zip(kept, kept[1:]):
         if a["ch"]["i"] == b["ch"]["i"] and a["mode"] == b["mode"] == "side":
             b["mode"] = "side-left"
     return hero, kept, warn
 
 
-# ── 产出 figures ─────────────────────────────────────────────────────────
 def _fig(cand: dict, caption: str, prefix: str = "") -> dict:
     c = cand["c"]
     return {"src": prefix + c["file"], "caption": caption, "vlm_caption": cand["caption"],
@@ -398,7 +368,7 @@ def to_figures(hero, blocks, model: str, warn: list[str], status: str = "llm") -
 @ls.traceable(name="plan_layout")
 def plan_layout(title: str, report_md: str, slots: list[dict], prof: dict, type_label: str,
                 accept: float, llm, model: str = "", out_dir: str | None = None) -> dict | None:
-    """主入口。llm(prompt)->str。返回 figures(带 blocks);失败返回 None(调用方退回规则排版)。"""
+    """生成版面方案；失败时返回 None。"""
     _, chapters = paragraph_index(report_md)
     cands = collect_candidates(slots, accept, title, chapters)
     if not cands:
@@ -412,7 +382,7 @@ def plan_layout(title: str, report_md: str, slots: list[dict], prof: dict, type_
     for attempt in range(2):
         try:
             raw = llm(prompt if attempt == 0 else prompt + "\n\n上次输出不是合法 JSON。只输出 JSON 对象。")
-        except Exception as e:  # noqa: BLE001 - 版面规划失败退回规则排版
+        except Exception as e:  # noqa: BLE001 - 版面规划失败时退回规则排版
             print(f"  ⚠️ 版面规划 LLM 失败: {type(e).__name__}: {e}", flush=True)
             return None
         plan = _parse_obj(raw)
@@ -433,7 +403,6 @@ def plan_layout(title: str, report_md: str, slots: list[dict], prof: dict, type_
 
 
 if __name__ == "__main__":
-    # 离线重排:用 figures_detail.json 里的旧打分,只重跑版面规划(LLM),再渲染 index.html。
     if len(sys.argv) < 2:
         sys.exit("用法: layout_planner.py runs/<dir>")
     from . import figures as FIG

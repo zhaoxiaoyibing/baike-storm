@@ -1,30 +1,28 @@
 # 公开演示
 
-## 离线 HTML 示例
+## HTML 示例
 
-- [打开人工智能示例页面](ai-demo/index.html)
-- [打开凯里·欧文主示例页面（9 章 / 32 来源 / 15,127 字）](kyrie-demo/index.html)
-- [在哔哩哔哩观看前端使用演示](https://www.bilibili.com/video/BV13kpz64EUp/)
-- [打开备用视频播放页](frontend-demo/index.html)
+- [人工智能示例页面](ai-demo/index.html)
+- [凯里·欧文示例页面（9 章、32 个来源、15,127 字）](kyrie-demo/index.html)
+- [前端使用演示（哔哩哔哩）](https://www.bilibili.com/video/BV13kpz64EUp/)
+- [备用视频播放页](frontend-demo/index.html)
 
-这个页面由 `baike-storm demo 人工智能` 生成，使用内置 MockLLM 和 mock 语料，不需要密钥或网络请求。页面的样式和脚本都已内嵌，可以直接下载后用浏览器打开：
+人工智能页面由 `baike-storm demo 人工智能` 生成，使用内置 `MockLLM` 和 mock 语料，不需要密钥或网络请求。样式和脚本已内嵌，下载后即可用浏览器打开：
 
 ```bash
 open examples/ai-demo/index.html
 ```
 
-页面中的事实和来源是演示数据，只用于展示渲染效果。
+人工智能页面中的事实和来源是演示数据，仅用于展示渲染效果。
 
-GitHub 文件页默认显示 HTML 源码；如果需要网页形式的在线预览，可以后续为仓库启用 GitHub Pages。
-
-启用 Pages 后，项目根地址会打开演示导航页：
+GitHub 文件页默认显示 HTML 源码；启用 GitHub Pages 后，可在线访问演示导航页：
 
 <https://zhaoxiaoyibing.github.io/baike-storm/>
 
-也可以直接访问：<https://zhaoxiaoyibing.github.io/baike-storm/examples/kyrie-demo/>
+也可以直接打开凯里·欧文示例：
+
+<https://zhaoxiaoyibing.github.io/baike-storm/examples/kyrie-demo/>
 
 ## 前端录屏
 
-录屏和在线播放页位于 [`frontend-demo/`](frontend-demo/)。
-
-较大的视频更适合上传到 GitHub Release、视频平台或对象存储，再把链接写回文档，避免把仓库变得过大。
+录屏和在线播放页位于 [`frontend-demo/`](frontend-demo/)。较大的视频适合上传到 GitHub Release、视频平台或对象存储，再将链接写回文档，以免仓库体积过大。

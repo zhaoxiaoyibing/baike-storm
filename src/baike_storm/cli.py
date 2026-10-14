@@ -1,13 +1,4 @@
-"""baike-storm 命令行入口:run / web / eval / render / demo。
-
-  baike-storm run    问界M9 --n 5 --m 3        # 生成一份百科报告(markdown + 渲染 HTML)
-  baike-storm web    --port 8765               # 启动聊天页(SSE 流式)
-  baike-storm eval   嫦娥六号 [报告.md]         # 用参考答案对报告打分
-  baike-storm render runs/问界M9_storm         # 把已有 run 目录渲染成 index.html
-  baike-storm demo   问界M9                    # 离线 mock 演示(无需任何密钥)
-
-环境变量见 config.py / README.md;不配任何密钥时 `demo` 可用 mock 后端跑通全链路。
-"""
+"""baike-storm 命令行入口。"""
 
 from __future__ import annotations
 
@@ -17,7 +8,6 @@ import sys
 
 from . import __version__, config
 
-# 常用键直接暴露给子命令,避免每个模块重复 os.environ.get
 _ENV_KEYS = ("STORM_LLM_BASE_URL", "STORM_LLM_API_KEY", "STORM_LLM_MODEL",
              "OPENAI_BASE_URL", "OPENAI_API_KEY", "RESEARCH_MODEL",
              "STORM_SEARCH_BACKEND", "TAVILY_API_KEY",
@@ -30,13 +20,11 @@ def _print_env() -> None:
     for k in _ENV_KEYS:
         v = os.environ.get(k, "")
         mark = "set" if v else "—"
-        # 不打印密钥明文
         if v and any(s in k for s in ("KEY", "SECRET", "SK")):
             v = f"{v[:4]}...{v[-2:]}" if len(v) > 8 else "***"
         print(f"  {k:26s} [{mark}] {v}")
 
 
-# ── run ─────────────────────────────────────────────────────────────────────
 def _cmd_run(args: argparse.Namespace) -> int:
     from . import storm_pipeline
     from .render_baike_html import render
@@ -49,15 +37,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
         res = storm_pipeline.run_storm_full(title, out_dir=out, n=n, m=m,
                                             figures=(None if args.figures is None else args.figures))
         md = res["report"]
-        # 落地 markdown 主产物
         with open(os.path.join(out, "final_report.md"), "w", encoding="utf-8") as f:
             f.write(md)
-        render(out)  # index.html(有 figures.json 则带配图)
+        render(out)
     print(f"\n{'=' * 80}\n报告长度: {len(md)} 字  →  {out}\n{'=' * 80}")
     return 0
 
 
-# ── web ─────────────────────────────────────────────────────────────────────
 def _cmd_web(args: argparse.Namespace) -> int:
     from .webapp import serve
 
@@ -67,7 +53,6 @@ def _cmd_web(args: argparse.Namespace) -> int:
     return 0
 
 
-# ── eval ────────────────────────────────────────────────────────────────────
 def _cmd_eval(args: argparse.Namespace) -> int:
     from .score import DIMENSIONS, _find_report, entity_recall, load_gold, score_report
 
@@ -97,7 +82,6 @@ def _cmd_eval(args: argparse.Namespace) -> int:
     return 0
 
 
-# ── render ──────────────────────────────────────────────────────────────────
 def _cmd_render(args: argparse.Namespace) -> int:
     from .render_baike_html import render
 
@@ -110,9 +94,8 @@ def _cmd_render(args: argparse.Namespace) -> int:
     return 0
 
 
-# ── demo ────────────────────────────────────────────────────────────────────
 def _cmd_demo(args: argparse.Namespace) -> int:
-    """离线演示:不请求任何外部服务,校验流水线能否端到端跑通。"""
+    """使用 mock 后端运行离线演示。"""
     os.environ.setdefault("STORM_LLM_BACKEND", "mock")
     os.environ.setdefault("STORM_SEARCH_BACKEND", "mock")
     os.environ.setdefault("STORM_FIG_PLAN", "0")

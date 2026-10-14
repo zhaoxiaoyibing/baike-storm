@@ -1,11 +1,5 @@
 # -*- coding: utf-8 -*-
-"""把 baike 重建产物渲染成一张现代极简学术百科风的单文件 HTML(纯前端,无外部依赖)。
-
-读取 <run_dir>/final_report.md(# 标题 / ## 分节 / 行内 [n] 脚注 / ### Sources),
-可选 route.txt、score.json。输出 <run_dir>/index.html,浏览器直接打开。
-
-用法: python render_baike_html.py runs/问界M9_dynoutline
-"""
+"""将报告 Markdown 渲染为单文件 HTML。"""
 
 import html
 import json
@@ -16,7 +10,7 @@ from . import tracing as ls
 
 
 def _inline(text: str) -> str:
-    """行内:转义 → **粗体**(轻高亮) → [n] 脚注上标。"""
+    """渲染粗体和脚注，并转义 HTML。"""
     s = html.escape(text)
     s = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", s)
 
@@ -35,10 +29,7 @@ def _table_cells(line: str) -> list[str]:
 
 
 def _render_blocks(body: str, id_prefix: str | None = None) -> str:
-    """块级:段落 / 有序·无序列表 / 引用块(> )。当前正文多为段落,其余做健壮兜底。
-
-    id_prefix 给定时,### 小节标题带 id="{id_prefix}-{k}"(两级目录的锚点,k 从 0 起)。
-    """
+    """渲染段落、标题、列表、表格和引用块。"""
     out, i, k = [], 0, 0
     lines = body.strip("\n").split("\n")
     while i < len(lines):
@@ -46,7 +37,6 @@ def _render_blocks(body: str, id_prefix: str | None = None) -> str:
         if not ln.strip():
             i += 1
             continue
-        # 子标题(### / ####),STORM 报告节内常见
         hm = re.match(r"^\s*(#{3,6})\s+(.+?)\s*#*\s*$", ln)
         if hm:
             lvl = min(len(hm.group(1)), 4)
@@ -57,7 +47,6 @@ def _render_blocks(body: str, id_prefix: str | None = None) -> str:
             out.append(f"<h{lvl}{hid}>{_inline(hm.group(2))}</h{lvl}>")
             i += 1
             continue
-        # GFM 表格:表头行 + 分隔行(|---|:--:|)
         if ln.lstrip().startswith("|") and i + 1 < len(lines) and _TABLE_SEP.match(lines[i + 1]):
             head = _table_cells(ln)
             i += 2
@@ -72,7 +61,6 @@ def _render_blocks(body: str, id_prefix: str | None = None) -> str:
             out.append(f'<div class="tbl"><table><thead><tr>{thead}</tr></thead>'
                        f"<tbody>{tbody}</tbody></table></div>")
             continue
-        # 引用块
         if ln.lstrip().startswith(">"):
             buf = []
             while i < len(lines) and lines[i].lstrip().startswith(">"):
@@ -80,7 +68,6 @@ def _render_blocks(body: str, id_prefix: str | None = None) -> str:
                 i += 1
             out.append(f"<blockquote>{_inline(' '.join(buf))}</blockquote>")
             continue
-        # 无序列表
         if re.match(r"^\s*[-*]\s+", ln):
             buf = []
             while i < len(lines) and re.match(r"^\s*[-*]\s+", lines[i]):
@@ -88,7 +75,6 @@ def _render_blocks(body: str, id_prefix: str | None = None) -> str:
                 i += 1
             out.append("<ul>" + "".join(f"<li>{_inline(x)}</li>" for x in buf) + "</ul>")
             continue
-        # 有序列表
         if re.match(r"^\s*\d+\.\s+", ln):
             buf = []
             while i < len(lines) and re.match(r"^\s*\d+\.\s+", lines[i]):
@@ -96,7 +82,6 @@ def _render_blocks(body: str, id_prefix: str | None = None) -> str:
                 i += 1
             out.append("<ol>" + "".join(f"<li>{_inline(x)}</li>" for x in buf) + "</ol>")
             continue
-        # 段落(连续非空行合并)
         buf = []
         while i < len(lines) and lines[i].strip() and not re.match(
             r"^\s*([-*]\s+|\d+\.\s+|>|#{3,6}\s|\|)", lines[i]
@@ -108,10 +93,9 @@ def _render_blocks(body: str, id_prefix: str | None = None) -> str:
 
 
 def parse_report(md: str):
-    """→ (title, [(sec_title, body_md)], [(n, text, url)])。
+    """返回 (title, [(章节标题, 正文)], [(编号, 来源文本, URL)])。
 
-    参考资料区兼容两种写法:旧版 `### Sources` + `[n] text: url`;
-    STORM 版 `## 参考资料` + `[n] text - url`。
+    兼容旧版 ### Sources 和当前的 ## 参考资料。
     """
     src = re.split(r"^(?:###\s+Sources|##\s+参考资料)\s*$", md, maxsplit=1, flags=re.MULTILINE)
     main, sources_raw = src[0], (src[1] if len(src) > 1 else "")
@@ -129,7 +113,7 @@ def parse_report(md: str):
 
 
 def extract_preamble(md: str) -> str:
-    """# 标题 与首个 ## 之间的导语段(STORM 的 LEAD 写在这里);没有则返回空串。"""
+    """提取标题和首个章节之间的导语。"""
     m = re.search(r"^#\s+.+$", md, flags=re.MULTILINE)
     rest = md[m.end():] if m else md
     rest = re.split(r"^##\s+", rest, maxsplit=1, flags=re.MULTILINE)[0]
@@ -137,7 +121,7 @@ def extract_preamble(md: str) -> str:
 
 
 def _subheads(body: str) -> list[str]:
-    """节内 ### 小节标题(纯文本,去掉 ** 与 [n]),顺序与 _render_blocks 的 id 编号一致。"""
+    """提取小节标题，顺序须与 _render_blocks 的锚点编号一致。"""
     out = []
     for ln in body.splitlines():
         m = re.match(r"^\s*###\s+(.+?)\s*#*\s*$", ln)
@@ -147,7 +131,7 @@ def _subheads(body: str) -> list[str]:
 
 
 def _lead(sections) -> str:
-    """一句话简介:取第一节正文的首句(到第一个句号)。"""
+    """取第一节正文的首句作为简介。"""
     if not sections:
         return ""
     body = re.sub(r"\[\d+\]", "", sections[0][1]).strip()
@@ -377,7 +361,7 @@ document.querySelectorAll('section.sec p[data-fig]').forEach(p=>{
 
 
 def _fig_source(fig, ref_by_url) -> str:
-    """图注里的出处:来源页正好是参考资料之一 → 链到 [n];否则写站点名并外链原页。"""
+    """生成图注来源链接。"""
     n = ref_by_url.get(fig.get("page", ""))
     if n:
         return f'<span class="src"> · 来源 <a href="#fn-{n}">[{n}]</a></span>'
@@ -398,7 +382,7 @@ def _figure(fig, ref_by_url, side: bool) -> str:
 
 _P_RE = re.compile(r"<p>(.*?)</p>", re.S)
 _TAG_RE = re.compile(r"<[^>]+>")
-_ANCHOR_MIN = 0.08  # 与任何段落重叠都低于此 → 退回首段
+_ANCHOR_MIN = 0.08  # 匹配过低时使用首段。
 
 
 def _bigrams(s: str) -> set[str]:
@@ -407,7 +391,7 @@ def _bigrams(s: str) -> set[str]:
 
 
 def _anchor_para(body_html: str, anchor: str):
-    """返回最贴合 anchor(图注+画面描述)的段落 Match;没有段落返回 None。"""
+    """返回与锚点最匹配的段落。"""
     paras = list(_P_RE.finditer(body_html))
     if not paras:
         return None
@@ -420,11 +404,7 @@ def _anchor_para(body_html: str, anchor: str):
 
 
 def _with_figure(body_html: str, fig, ref_by_url) -> str:
-    """把节图插到正文里与图注最相关的段落旁(fig["anchor"] 与各段的 bigram 重叠;无 anchor 则首段)。
-
-    - 单张横图:通栏,放在该段之后;竖图/方图:右浮动,放在该段之前(文字环绕)。
-    - 组图(list):两张并排成一行,放在该段之后。
-    """
+    """将章节图片插入与图注最相关的段落旁。"""
     if not fig:
         return body_html
     figs = fig if isinstance(fig, list) else [fig]
@@ -444,7 +424,7 @@ def _with_figure(body_html: str, fig, ref_by_url) -> str:
 
 
 def _fig_el(fig, ref_by_url, cls: str, no: int) -> str:
-    """版面规划产物里的单张图:带全文图号(图注前缀 + hover 时高亮锚点段落)。"""
+    """渲染版面规划中的单张图片。"""
     cap = html.escape(fig.get("caption", ""))
     w, h = fig.get("w") or 0, fig.get("h") or 0
     size = f' width="{w}" height="{h}"' if w and h else ""
@@ -456,11 +436,7 @@ def _fig_el(fig, ref_by_url, cls: str, no: int) -> str:
 
 
 def _with_blocks(body_html: str, blocks: list[dict], ref_by_url, counter: list[int]) -> str:
-    """按版面规划(layout_planner)把图块插到指定段落:
-    - side / side-left:浮动,插在锚点段之前(文字环绕),其后第一个 ### 小节标题 clear,避免浮动图挤进下一小节;
-    - wide / pair / trio:插在锚点段之后。
-    锚点段带 data-fig="图号…",鼠标悬停图片时高亮对应段落。counter = [全文已用图号],跨章累加。
-    """
+    """按版面规划将图片插入指定段落。"""
     paras = list(_P_RE.finditer(body_html))
     before, after, marks = {}, {}, {}
     for b in sorted(blocks, key=lambda b: b.get("para", 0)):
@@ -505,7 +481,7 @@ def _with_blocks(body_html: str, blocks: list[dict], ref_by_url, counter: list[i
 
 
 def _hero_style(hero) -> str:
-    """主图按原图比例选裁切框:竖图 3:4(人物脸偏上,焦点上移)、方图 1:1、横图 4:3、超宽 16:10。"""
+    """根据原图比例选择主图裁切框。"""
     r = (hero.get("w") or 4) / max(hero.get("h") or 3, 1)
     if r < 0.85:
         return "aspect-ratio:3/4;object-position:50% 18%"
@@ -515,12 +491,12 @@ def _hero_style(hero) -> str:
 
 
 def _infobox(title, dalei, sections, score, hero=None, ref_by_url=None, info=None) -> str:
-    """右侧信息栏。info = {"label","fields":[{k,v,refs}]}(infobox.py 产物);没有则退回 类型+关键词。"""
+    """渲染右侧信息栏，没有字段时显示类型和关键词。"""
     stat = ""
     if score and score.get("total") is not None:
         stat = f'<div class="stat"><div><b>{score["total"]:g}</b><span>重建评分</span></div></div>'
     fields = (info or {}).get("fields") or []
-    valid_refs = set((ref_by_url or {}).values())  # 参考资料里真实存在的编号(str)
+    valid_refs = set((ref_by_url or {}).values())
     if fields:
         rows = []
         for f in fields:
@@ -549,19 +525,16 @@ def _infobox(title, dalei, sections, score, hero=None, ref_by_url=None, info=Non
 
 
 def _char_count(sections) -> int:
-    """正文可见字数:去掉 markdown 标记、脚注与空白。"""
+    """统计正文可见字数。"""
     text = "".join(b for _, b in sections)
     text = re.sub(r"\[\d+\]|[#*|>\-:`]|\s", "", text)
     return len(text)
 
 
 def build_html(title, sections, sources, dalei="", score=None, lead=None, figures=None, infobox=None) -> str:
-    """lead 不给(None/空)时退回"首节首句"作一句话简介。
+    """构建完整 HTML；缺少 lead 时使用首节首句。
 
-    figures(可选):{"hero": fig|None, "sections": {节标题: fig}, "blocks": [...]},
-    fig = {src, caption, site, page, w, h};有 blocks(版面规划产物,见 layout_planner)时按段落锚点
-    与 mode/size 嵌图,否则按 sections 每章一图;都不给则与原版输出一致。
-    infobox(可选):{"label","fields":[{k,v,refs}]};不给则信息栏退回 类型+关键词。
+    figures 支持 {hero, sections, blocks}，blocks 优先；infobox 使用 {label, fields:[{k,v,refs}]}。
     """
     figures = figures or {}
     sec_figs = figures.get("sections") or {}
@@ -575,7 +548,6 @@ def build_html(title, sections, sources, dalei="", score=None, lead=None, figure
                 f'<span>{html.escape(t)}</span></a>' + (f'<div class="subs">{subs}</div>' if subs else "") + "</div>")
 
     toc_items = "".join(_toc_group(i, t, b) for i, (t, b) in enumerate(sections))
-    # 版面规划产物(blocks)优先:段落级锚点 + 多种嵌入方式;没有则退回旧版每章一图
     blocks_by_ch = {}
     for blk in figures.get("blocks") or []:
         blocks_by_ch.setdefault(blk.get("chapter"), []).append(blk)
@@ -646,7 +618,7 @@ def build_html(title, sections, sources, dalei="", score=None, lead=None, figure
 
 @ls.traceable(name="render_markdown")
 def render_markdown(md: str, dalei: str = "", score=None, figures=None, infobox=None) -> str:
-    """markdown 报告 → 完整 HTML 字符串(web 前端与 render() 共用)。"""
+    """将 Markdown 报告转换为 HTML。"""
     title, sections, sources = parse_report(md)
     return build_html(title, sections, sources, dalei=dalei, score=score, lead=extract_preamble(md),
                       figures=figures, infobox=infobox)

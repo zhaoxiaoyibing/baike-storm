@@ -1,21 +1,4 @@
-"""STORM 化百科重建 —— 核心编排(显式 Python 驱动,不依赖 agent 自循环)。
-
-流程(见 docs/STORM_PLAN.md):
-  run_prewriting:discover_perspectives → 每个 persona 跑 simulate_conversation
-    (写手提问 ↔ expert_answer 检索作答),所有源汇入全局库 R。
-  outline:draft_outline(仅 LLM 知识) → refine_outline(用全部对话精修)。
-  write_article:逐 ## 节从 R 词法召回相关源 → 带 [n] 引用成文 → 去重 → 合成导语。
-
-可替换组件(均走环境变量,见 config.py / .env.example):
-  - LLM  : llm.pipeline_client()(OpenAI 兼容网关;STORM_LLM_BACKEND=mock 走离线)。
-  - 检索 : search.search()(STORM_SEARCH_BACKEND=tavily|mock)。
-  - 词类 : editorial.route_to_dalei(编辑指南文件可关)。
-
-运行:
-  export OPENAI_BASE_URL=http://<网关>/v1 OPENAI_API_KEY=<key>   # 或 STORM_LLM_BACKEND=mock
-  baike-storm run 问界M9
-  或 python -m baike_storm.storm_pipeline 问界M9
-"""
+"""STORM 百科重建的流程编排。"""
 
 import contextvars
 from contextlib import contextmanager
@@ -37,7 +20,6 @@ from . import prompts_storm as P
 LANGSMITH_PROJECT = os.environ.get("BAIKE_LANGSMITH_PROJECT", "baike_storm")
 os.environ["LANGSMITH_PROJECT"] = LANGSMITH_PROJECT
 
-# 普通 HTTP 检索不会自动生成 LangChain 子轨迹。
 search_tool = ls.traceable(name="search", run_type="tool")(search.search)
 route_to_dalei = ls.traceable(name="classify_entry")(editorial.route_to_dalei)
 
@@ -45,7 +27,7 @@ route_to_dalei = ls.traceable(name="classify_entry")(editorial.route_to_dalei)
 @contextmanager
 def storm_trace(title: str, out_dir: str | None = None,
                 **parameters: object) -> Iterator[object]:
-    """覆盖一次生成及入口后处理;嵌套调用共享同一任务根轨迹。"""
+    """创建一次任务的根轨迹，嵌套调用复用该轨迹。"""
     current = ls.get_current_run_tree()
     if current is not None and current.name == "baike_storm_task":
         yield current
@@ -65,24 +47,23 @@ def storm_trace(title: str, out_dir: str | None = None,
                 elif os.path.exists(path):
                     os.remove(path)
 
-# 固定视角 p0(STORM_PLAN §一.1):基础事实写手,负责广覆盖基本信息。
+# 固定的基础事实视角。
 P0 = {"name": "基础事实写手", "focus": "该词条最基本的定义、身份、核心属性与广覆盖的基本信息"}
-# 固定视角「最新动态」(STORM_NEWS=0 关闭):专追近 12 个月,检索按发布时间重排。
+# 固定的近期动态视角。
 P_NEWS = {"name": "最新动态追踪", "recency": True,
           "focus": "近一年({since} 至今)的最新进展、新闻事件、数据更新与状态变化(版本/销量/职务/赛季/政策等)"}
 
-# 运行参数(统一在 config.py 读取;此处仅留引用,便于外部自定义)。
 SEARCH_TOP_K = config.SEARCH_TOP_K
 SECTION_TOP_K = config.SECTION_TOP_K
 MIN_CHAPTERS = config.MIN_CHAPTERS
 MAX_CHAPTERS = config.MAX_CHAPTERS
 RECENT_DAYS = config.RECENT_DAYS
-# 不该成为正文章的提纲节(导语另写;参考资料由代码拼)。
+# 导语和参考资料另行生成，其余附录不作为正文章。
 SKIP_CHAPTERS = re.compile(r"^(概述|简介|综述|参考资料|参考文献|参见|外部链接|延伸阅读|相关条目|注释|脚注)$")
 
 
 def today() -> _dt.date:
-    """运行"今天"(STORM_TODAY=YYYY-MM-DD 可固定,便于复现实验)。"""
+    """返回运行日期，可用 STORM_TODAY 固定。"""
     t = os.environ.get("STORM_TODAY")
     return _dt.date.fromisoformat(t) if t else _dt.date.today()
 
@@ -91,17 +72,16 @@ def _fmt_date(epoch: int) -> str:
     return _dt.datetime.fromtimestamp(epoch).strftime("%Y-%m-%d") if epoch and epoch > 0 else ""
 
 
-# ── 过程事件钩子(给 web 前端流式展示用;CLI 下未设置 → 空操作)──────────────
-# 用 ContextVar 而非模块全局:每个 web 请求在自己的线程里 set,互不串台。
+# 使用 ContextVar 隔离并发 Web 请求的事件回调。
 _EMITTER: contextvars.ContextVar = contextvars.ContextVar("storm_emitter", default=None)
 
 
 class RunCancelled(Exception):
-    """emitter 抛出它表示调用方(如 web 客户端断开)要求中止本次运行;各步不应吞掉它。"""
+    """事件回调用它通知流程停止；各步不得吞掉该异常。"""
 
 
 def set_emitter(fn):
-    """注册事件回调 fn(kind: str, data: dict)。返回 token,可交给 _EMITTER.reset。"""
+    """注册事件回调并返回可用于 reset 的 token。"""
     return _EMITTER.set(fn)
 
 
@@ -111,17 +91,16 @@ def _emit(kind: str, **data) -> None:
         fn(kind, data)
 
 
-# ── LLM 调用 ──────────────────────────────────────────────────────────────
 @ls.traceable(name="generate_text")
 def _llm(prompt: str, **kwargs) -> str:
-    """单轮模型调用,归一成纯文本。kwargs 透传的 langsmith_extra 等元信息仅在真实 tracer 下生效。"""
+    """调用模型并返回文本。"""
     if not llm_is_ready():
         raise RuntimeError(MISSING_KEY_MSG)
     return pipeline_client().invoke(prompt)
 
 
 def _parse_json(text: str, fallback):
-    """从 LLM 输出稳健抠出 JSON(去围栏 + 截取首尾括号)。失败返回 fallback。"""
+    """从模型输出中提取 JSON，失败时返回 fallback。"""
     t = text.strip()
     t = re.sub(r"^```(?:json)?\s*|\s*```$", "", t, flags=re.MULTILINE).strip()
     for lb, rb in (("[", "]"), ("{", "}")):
@@ -134,11 +113,10 @@ def _parse_json(text: str, fallback):
     return fallback
 
 
-# ── 全局源库 R(按 URL 去重,给全局 [n] 编号)─────────────────────────────
 class SourceLib:
     def __init__(self):
-        self._by_url = {}          # url -> id
-        self.sources = []          # [{id,name,url,sentence,credibility}]
+        self._by_url = {}
+        self.sources = []
 
     def add(self, item: dict) -> int:
         url = (item.get("url") or "").strip()
@@ -153,7 +131,6 @@ class SourceLib:
                 "url": url,
                 "sentence": item.get("sentence", ""),
                 "credibility": item.get("credibility", ""),
-                # 配图用:来源页标题 + 页面自带图片(图跟着 [n] 走,图注可直接链参考资料)
                 "title": item.get("title", ""),
                 "images": item.get("images") or [],
                 "page_time": int(item.get("page_time") or 0),
@@ -172,7 +149,7 @@ class SourceLib:
 
 
 def _fmt_sources(src_list: list[dict]) -> str:
-    """把一批源格式化成带全局 [n] 编号的块,喂给 expert_answer / write_section。"""
+    """格式化带全局编号的来源，供模型引用。"""
     lines = []
     for s in src_list:
         cred = f"({s['credibility']}) " if s.get("credibility") else ""
@@ -182,11 +159,7 @@ def _fmt_sources(src_list: list[dict]) -> str:
 
 
 def _pick_hits(hits: list[dict], k: int, recency: bool) -> list[dict]:
-    """从按权威排序的候选里选 k 条。
-
-    recency=True(最新动态视角):按发布时间倒序取(无日期的排最后)。
-    否则保持权威序取前 k-1 条,末位留给"近 RECENT_DAYS 天内且比已选都新"的源(没有就照常取第 k 条)。
-    """
+    """近期视角按发布时间选择；其他视角留末位给更新的来源，避免只取权威排序前列。"""
     if recency:
         return sorted(hits, key=lambda h: -(h.get("page_time") or 0))[:k]
     head, rest = hits[: k - 1], hits[k - 1:]
@@ -198,10 +171,9 @@ def _pick_hits(hits: list[dict], k: int, recency: bool) -> list[dict]:
     return head + [max(fresh, key=lambda h: h["page_time"]) if fresh else rest[0]]
 
 
-# ── §3.1 多视角发现 ───────────────────────────────────────────────────────
 @ls.traceable(name="discover_perspectives")
 def discover_perspectives(title: str, dalei_block: str, n: int = 5) -> list[dict]:
-    """产出 N 个视角:固定 p0 (+ 固定「最新动态」) + LLM 生成的其余纵深视角。"""
+    """生成基础、近期和其他纵深视角。"""
     personas = [P0]
     if config.NEWS_ON and n >= 2:
         since = (today() - _dt.timedelta(days=RECENT_DAYS)).strftime("%Y年%m月")
@@ -212,7 +184,7 @@ def discover_perspectives(title: str, dalei_block: str, n: int = 5) -> list[dict
     for item in arr:
         if isinstance(item, dict) and item.get("name"):
             personas.append({"name": item["name"], "focus": item.get("focus", "")})
-    # 兜底:LLM 没给够就用通用视角补齐,保证至少有 p0。
+    # 模型返回不足时补充通用视角。
     generic = [
         {"name": "沿革与背景", "focus": "起源、发展历程、时间线与背景脉络"},
         {"name": "主体与关键数据", "focus": "核心构成、关键参数、规格与量化事实"},
@@ -227,14 +199,9 @@ def discover_perspectives(title: str, dalei_block: str, n: int = 5) -> list[dict
     return personas[:n]
 
 
-# ── §3.2 专家作答:拆 query → search_tool → 入库 R → 带引用综合 ────────
 @ls.traceable(name="expert_answer")
 def expert_answer(title: str, question: str, R: SourceLib, recency: bool = False) -> tuple[str, list[int]]:
-    """扮接地气专家:检索一手资料、入全局库 R、带 [n] 引用综合作答。
-
-    recency=True(最新动态视角):检索式要求带年份,召回按发布时间重排。
-    Returns: (answer_text, 本次新引用到的全局源 id 列表)。
-    """
+    """检索资料并生成带引用的回答。"""
     d = today()
     hint = P.RECENCY_HINT.format(year=d.year, last_year=d.year - 1) if recency else ""
     queries = _parse_json(
@@ -249,9 +216,9 @@ def expert_answer(title: str, question: str, R: SourceLib, recency: bool = False
     used_ids = []
     for q in queries:
         try:
-            # 多取一些候选,再按权威序 + 新鲜度挑 SEARCH_TOP_K 条
+            # 先扩大候选集，再按权威和新鲜度筛选。
             hits = _pick_hits(search_tool(q, top_k=SEARCH_TOP_K * 3), SEARCH_TOP_K, recency)
-        except Exception as e:  # noqa: BLE001 - 单条检索失败不该中断整场对话
+        except Exception as e:  # noqa: BLE001 - 单条检索失败不应中断整场对话
             print(f"    ⚠️ 检索失败 q={q!r}: {e}", flush=True)
             hits = []
             _emit("search_error", query=q, error=str(e))
@@ -263,7 +230,6 @@ def expert_answer(title: str, question: str, R: SourceLib, recency: bool = False
             hits=[{k: R.get(i)[k] for k in ("id", "name", "url", "credibility")} for i in ids],
             total_sources=len(R),
         )
-    # 去重保序
     seen = set()
     used_ids = [i for i in used_ids if not (i in seen or seen.add(i))]
 
@@ -273,10 +239,9 @@ def expert_answer(title: str, question: str, R: SourceLib, recency: bool = False
     return answer.strip(), used_ids
 
 
-# ── §3.2 模拟对话:写手提问 ↔ 专家作答,最多 m 轮 ─────────────────────────
 @ls.traceable(name="simulate_conversation")
 def simulate_conversation(title: str, persona: dict, R: SourceLib, m: int = 3) -> list[dict]:
-    """对单个 persona 跑最多 m 轮问答。返回 [{round,question,answer,source_ids}]。"""
+    """为一个视角运行最多 m 轮问答。"""
     turns = []
     for rnd in range(1, m + 1):
         history = _render_history(turns) if turns else "(暂无,这是第一个问题)"
@@ -306,7 +271,7 @@ def _render_history(turns: list[dict]) -> str:
 
 @ls.traceable(name="run_prewriting")
 def run_prewriting(title: str, dalei_block: str, R: SourceLib, n: int = 5, m: int = 3) -> list[dict]:
-    """跑完所有视角的对话,源全部汇入 R。返回 [{persona, turns}]。"""
+    """运行所有视角的对话，并将来源汇入 R。"""
     personas = discover_perspectives(title, dalei_block, n=n)
     print(f"🎭 视角({len(personas)}): " + " / ".join(p["name"] for p in personas), flush=True)
     _emit("perspectives", personas=personas)
@@ -322,7 +287,7 @@ def run_prewriting(title: str, dalei_block: str, R: SourceLib, n: int = 5, m: in
 
 
 def _conversations_text(conversations: list[dict]) -> str:
-    """把全部对话拼成一大段文本(供 refine_outline 读)。"""
+    """拼接对话，供提纲精修使用。"""
     blocks = []
     for c in conversations:
         p = c["persona"]
@@ -331,7 +296,6 @@ def _conversations_text(conversations: list[dict]) -> str:
     return "\n\n".join(blocks)
 
 
-# ── §3.3 两段式提纲(顺序:先调研 → 再草拟 → 再精修)──────────────────────
 @ls.traceable(name="draft_outline")
 def draft_outline(title: str) -> str:
     return _llm(P.DRAFT_OUTLINE.format(title=title, min_ch=MIN_CHAPTERS, max_ch=MAX_CHAPTERS)).strip()
@@ -339,7 +303,7 @@ def draft_outline(title: str) -> str:
 
 @ls.traceable(name="refine_outline")
 def refine_outline(title: str, draft: str, conversations: list[dict]) -> str:
-    """用调研对话精修提纲;大章数仍超上限时再做一次相近大章合并。"""
+    """根据调研对话精修提纲，必要时合并大章。"""
     outline = _llm(
         P.REFINE_OUTLINE.format(
             title=title, today=today().isoformat(), min_ch=MIN_CHAPTERS, max_ch=MAX_CHAPTERS,
@@ -359,7 +323,6 @@ def refine_outline(title: str, draft: str, conversations: list[dict]) -> str:
     return outline
 
 
-# ── §3.4 分节成文:词法召回 top-k 源 → 带引用写节 → 去重 → 导语 ────────────
 _STOP = set("的了和与及或在是对为之其该等这那被把你我他她它们个号款式型年月日")
 
 
@@ -369,10 +332,8 @@ def _char_bigrams(s: str) -> set[str]:
 
 
 def _recall_sources(section_title: str, R: SourceLib, top_k: int = SECTION_TOP_K) -> list[dict]:
-    """v1 词法召回:节标题 vs 源(name+sentence)的字符 bigram 重叠排序,取 top-k。
-
-    R 较小时(<= top_k)直接整表返回,免得召回逻辑把稀疏源漏掉。
-    """
+    """按节标题与来源文本的字符 bigram 重叠取 top-k。"""
+    # 来源较少时全部保留，避免漏掉稀疏资料。
     if len(R) <= top_k:
         return list(R.sources)
     key = _char_bigrams(section_title) - _STOP
@@ -386,13 +347,13 @@ def _recall_sources(section_title: str, R: SourceLib, top_k: int = SECTION_TOP_K
 
 
 def _clean_heading(s: str) -> str:
-    """去掉标题里的编号/加粗等装饰:「一、发展历程」「1. 发展历程」「**发展历程**」→「发展历程」。"""
+    """去掉标题中的编号和 Markdown 装饰。"""
     s = re.sub(r"[*_`]+", "", s).strip()
     return re.sub(r"^([0-9一二三四五六七八九十]+[、.．:：)\s]|第[一二三四五六七八九十0-9]+[章节部分][、:：\s]*)\s*", "", s).strip()
 
 
 def _parse_outline(outline: str) -> list[tuple[str, list[str]]]:
-    """从 markdown 提纲抽出 [(## 大章, [### 小节…])];剔除概述/参考资料等非正文章。"""
+    """解析 Markdown 提纲，并过滤附录章节。"""
     out: list[tuple[str, list[str]]] = []
     skipping = False
     for line in outline.splitlines():
@@ -411,12 +372,12 @@ def _parse_outline(outline: str) -> list[tuple[str, list[str]]]:
 
 
 def _parse_sections(outline: str) -> list[str]:
-    """只要 ## 大章名(供事件 / 章数检查)。"""
+    """返回大章标题。"""
     return [ch for ch, _ in _parse_outline(outline)]
 
 
 def _strip_appendix(article: str) -> str:
-    """删掉 LLM 自己写出的「## 参考资料 / 参见 / 外部链接」等附录章(参考资料由代码统一拼)。"""
+    """移除模型输出的附录，参考资料由代码统一拼接。"""
     keep, out = True, []
     for line in article.splitlines():
         m = re.match(r"^##\s+(.+?)\s*$", line)
@@ -429,7 +390,7 @@ def _strip_appendix(article: str) -> str:
 
 @ls.traceable(name="write_article")
 def write_article(title: str, outline: str, R: SourceLib) -> str:
-    """逐 ## 大章成文(章内按 ### 小节组织) → 拼接 → 去重 → 合成导语置顶。返回最终 markdown(含参考资料)。"""
+    """按大章生成正文，去重后补充导语和参考资料。"""
     chapters = _parse_outline(outline) or [("主体内容", []), ("影响与评价", [])]
     sections = [ch for ch, _ in chapters]
     print(f"✍️  分章成文({len(sections)} 章): " + " / ".join(sections), flush=True)
@@ -438,7 +399,7 @@ def write_article(title: str, outline: str, R: SourceLib) -> str:
 
     parts = []
     for i, (st, subs) in enumerate(chapters):
-        # 召回 query = 章名 + 小节名:小节通常更具体,能拉回长尾源
+        # 小节标题通常更具体，能召回长尾来源。
         srcs = _recall_sources(" ".join([st, *subs]), R)
         _emit("section_start", index=i + 1, total=len(sections), title=st, n_sources=len(srcs),
               subsections=subs)
@@ -452,16 +413,14 @@ def write_article(title: str, outline: str, R: SourceLib) -> str:
         parts.append(body)
     article = "\n\n".join(parts)
 
-    # 去重 pass
     _emit("stage", stage="dedup", label="全文去重", chars=len(article))
     article = _llm(P.DEDUP.format(title=title, article=article)).strip()
     article = _strip_appendix(article)
-    # 导语
     _emit("stage", stage="lead", label="合成导语", chars=len(article))
     lead = _llm(P.LEAD.format(title=title, article=article, today=td)).strip()
     _emit("lead_done", lead=lead)
 
-    # 组装:# 标题 → 导语 → 正文 → 参考资料(只列正文真正引用到的 [n])
+    # 只列正文实际引用的来源。
     cited = sorted({int(x) for x in re.findall(r"\[(\d+)\]", article)})
     refs = []
     for sid in cited:
@@ -473,14 +432,13 @@ def write_article(title: str, outline: str, R: SourceLib) -> str:
     return f"# {title}\n\n{lead}\n\n{article}{ref_block}\n"
 
 
-# ── 顶层编排 ──────────────────────────────────────────────────────────────
 def run_storm(title: str, out_dir: str | None = None, n: int = 5, m: int = 3, figures: bool | None = None) -> str:
-    """STORM 全流程:多视角调研 → 两段式提纲 → 分节成文(→ 配图)。返回最终报告文本。"""
+    """运行 STORM 全流程并返回报告文本。"""
     return run_storm_full(title, out_dir=out_dir, n=n, m=m, figures=figures)["report"]
 
 
 def _figures_wanted(figures: bool | None, out_dir: str | None) -> tuple[bool, str]:
-    """figures=None → 看环境变量 STORM_FIGURES(默认开);还要有 out_dir 落图、VLM 可用。"""
+    """判断是否启用配图，并返回原因或模型名。"""
     if figures is None:
         figures = os.environ.get("STORM_FIGURES", "1") not in ("0", "false", "False", "")
     if not figures:
@@ -494,14 +452,10 @@ def _figures_wanted(figures: bool | None, out_dir: str | None) -> tuple[bool, st
 
 def run_storm_full(title: str, out_dir: str | None = None, n: int = 5, m: int = 3,
                    figures: bool | None = None) -> dict:
-    """同 run_storm,但返回 {report, figures, route, dalei}。figures 的 src 相对 out_dir(img/...)。
-
-    配图只进 figures.json / HTML,不改 markdown,所以 score / entity_recall 不受影响;
-    配图失败只记日志,不影响报告产出。
-    """
+    """返回 {report, figures, infobox, route, dalei}；图片路径相对 out_dir。"""
     with storm_trace(title, out_dir, n=n, m=m, figures=figures) as root:
         result = _run_storm_full(title, out_dir, n, m, figures)
-        if root is not None:  # 未安装 langsmith 时 root 为 None
+        if root is not None:
             root.add_outputs(result)
         return result
 
@@ -526,10 +480,10 @@ def _run_storm_full(title: str, out_dir: str | None, n: int, m: int,
     final_outline = refine_outline(title, draft, conversations)
     _emit("outline_final", outline=final_outline, sections=_parse_sections(final_outline))
     report = write_article(title, final_outline, R)
-    trace_url = None  # 根轨迹 URL 由 storm_trace 在成功/异常退出时统一保存
+    trace_url = None
     dalei_canonical = dalei["canonical"] if dalei else ""
 
-    # 信息栏:从成文正文抽结构化字段(值带正文已有的 [n]);失败不影响报告
+    # 信息栏生成失败不影响报告。
     infobox = None
     _emit("stage", stage="infobox", label="生成信息栏")
     try:
@@ -562,14 +516,14 @@ def _run_storm_full(title: str, out_dir: str | None, n: int, m: int,
                                   llm_model=pipeline_client().model_name)
         except RunCancelled:
             raise
-        except Exception as e:  # noqa: BLE001 - 配图是锦上添花,失败不拖垮报告
+        except Exception as e:  # noqa: BLE001 - 配图失败不影响报告
             print(f"⚠️ 配图失败,输出无图版本: {type(e).__name__}: {e}", flush=True)
             _emit("figures_error", error=f"{type(e).__name__}: {e}")
     else:
         print(f"🖼️  跳过配图: {why}", flush=True)
         _emit("figures_skipped", reason=why)
     if out_dir:
-        # 每次都写(未配图 = 空),免得复用同一目录时渲染到上一轮的旧图
+        # 覆盖旧文件，避免复用目录时残留上一轮的图片。
         with open(os.path.join(out_dir, "figures.json"), "w", encoding="utf-8") as f:
             json.dump(figs or {"hero": None, "sections": {}}, f, ensure_ascii=False, indent=1)
     return {"report": report, "figures": figs, "route": route, "dalei": dalei_canonical, "infobox": infobox}
@@ -604,7 +558,6 @@ def _dump(out_dir, title, route, report, draft, final_outline, conversations, R,
     for s in R.sources:
         conv_md.append(f"[{s['id']}] {s['name']} ({s['credibility']}) {s['url']}")
     w("conversations.md", "\n".join(conv_md))
-    # 全局源库(含页面图片),供 figures.py 离线重配图
     w("sources.json", json.dumps(R.sources, ensure_ascii=False, indent=1))
 
     if trace_url:
@@ -623,5 +576,5 @@ if __name__ == "__main__":
         print(report)
         from .render_baike_html import render
 
-        render(out)  # index.html(有 figures.json 则带配图)
+        render(out)
     print(f"\n{'=' * 80}\n报告长度: {len(report)} 字  →  {out}\n")

@@ -1,17 +1,6 @@
-"""百科 STORM 聊天页后端 —— 纯标准库 HTTP + SSE,零新增依赖。
+"""百科 STORM 的 HTTP 与 SSE 后端。
 
-  GET /                              → static/index.html(聊天页)
-  GET /api/run?title=&n=&m=&fig=     → text/event-stream,逐条推送 storm_pipeline 过程事件,
-                                       结束时推 final(markdown + 渲染好的整页 HTML)。fig=0 关闭配图。
-  GET /runs/<dir>/index.html|img/*   → 生成产物(只放行 html 与图片,限定在 runs/ 内)
-  GET /api/health                    → ok
-
-每个请求在独立 worker 线程里跑 run_storm_full,事件经 storm_pipeline.set_emitter(ContextVar,线程隔离)
-进队列,请求线程负责写 SSE。客户端断开 → 置 cancel → worker 下一次 emit 时抛 RunCancelled 中止。
-
-用法:
-  baike-storm web --port 8765
-  python -m baike_storm.webapp --port 8765
+生成任务在独立线程中运行，事件经队列写入 SSE；客户端断开后，下一次 emit 中止任务。
 """
 
 from __future__ import annotations
@@ -45,7 +34,7 @@ STATIC_TYPES = {
     ".webp": "image/webp",
 }
 
-_run_slots: threading.Semaphore  # serve() 里按 --max-runs 初始化
+_run_slots: threading.Semaphore
 
 
 def _safe_dirname(title: str) -> str:
@@ -62,10 +51,9 @@ def _clamp_int(raw: str | None, default: int, lo: int, hi: int) -> int:
 class Handler(BaseHTTPRequestHandler):
     server_version = "BaikeStorm/0.1"
 
-    def log_message(self, fmt, *args):  # 精简访问日志
+    def log_message(self, fmt, *args):
         sys.stderr.write(f"[{time.strftime('%H:%M:%S')}] {self.address_string()} {fmt % args}\n")
 
-    # ── 路由 ──────────────────────────────────────────────────────────────
     def do_GET(self):
         url = urlparse(self.path)
         if url.path in ("/", "/index.html"):
@@ -79,7 +67,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._send_text(404, "not found")
 
     def _send_run_file(self, rel: str):
-        """只放行 runs/ 内的 html 与图片(防目录穿越:realpath 后必须仍在 runs/ 下)。"""
+        """仅发送 runs/ 内的 HTML 与图片，拒绝目录穿越。"""
         path = os.path.realpath(os.path.join(RUNS_DIR, rel))
         ctype = STATIC_TYPES.get(os.path.splitext(path)[1].lower())
         if not ctype or os.path.commonpath([path, RUNS_DIR]) != RUNS_DIR or not os.path.isfile(path):
@@ -104,9 +92,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    # ── SSE ───────────────────────────────────────────────────────────────
     def _sse(self, payload: dict | None):
-        """写一条 SSE 事件;payload=None 写心跳注释。断连时抛 OSError 子类。"""
+        """写入 SSE；payload 为 None 时发送心跳，断连时抛出 OSError。"""
         if payload is None:
             chunk = ": ping\n\n"
         else:
@@ -149,7 +136,7 @@ class Handler(BaseHTTPRequestHandler):
             q.put({"type": kind, **data})
 
         def worker():
-            storm_pipeline.set_emitter(emitter)  # 新线程 = 新 context,只影响本线程
+            storm_pipeline.set_emitter(emitter)  # ContextVar 使 emitter 按线程隔离。
             try:
                 with storm_pipeline.storm_trace(title, out_dir, n=n, m=m, figures=fig):
                     res = storm_pipeline.run_storm_full(title, out_dir=out_dir, n=n, m=m, figures=fig)
@@ -185,19 +172,19 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     ev = q.get(timeout=HEARTBEAT_SEC)
                 except queue.Empty:
-                    self._sse(None)  # 心跳:长 LLM 调用期间保活,也用来尽早发现断连
+                    self._sse(None)  # 长调用期间保活并检测断连。
                     continue
                 if ev is None:
                     break
                 ev["t"] = round(time.time() - t0, 1)
                 self._sse(ev)
-        except OSError:  # BrokenPipe / ConnectionReset:客户端停止或关页
+        except OSError:
             cancel.set()
             print(f"🔌 客户端断开,取消: {title}", flush=True)
 
 
 def serve(host: str | None = None, port: int | None = None, max_runs: int = 2):
-    """启动 Web 服务(阻塞)。host/port 缺省取 STORM_WEB_HOST / STORM_WEB_PORT 环境变量。"""
+    """阻塞运行服务；host、port 默认从环境变量读取。"""
     global _run_slots
     if host is None:
         host = os.environ.get("STORM_WEB_HOST", "127.0.0.1")

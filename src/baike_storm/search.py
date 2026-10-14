@@ -1,20 +1,4 @@
-"""检索后端 —— 流水线的唯一搜索入口。
-
-默认后端(``STORM_SEARCH_BACKEND=tavily``):Tavily 搜索 API(``tavily-python`` 包)。
-凭据只走环境变量 ``TAVILY_API_KEY``,代码里没有任何默认端点或密钥;
-配置见 ``.env.example`` 与 README「检索后端」一节。
-
-离线后端(``STORM_SEARCH_BACKEND=mock``):读取 :data:`config.MOCK_CORPUS_DIR` 下的
-JSON 语料(见 ``data/mock_corpus/README.md``),按查询词条命中匹配,供 demo / 单测使用。
-
-统一返回条目格式(与项目历史一致):
-  {"name", "url", "sentence", "credibility", "title", "images", "page_time"}
-其中:
-  - ``name``  = 来源站点(取 URL 的 host);
-  - ``sentence`` = Tavily 返回的摘要正文(喂给 LLM 的素材);
-  - ``credibility`` = 由 Tavily 相关性得分映射(0.8+ = high,0.5+ = medium,否则 low);
-  - ``page_time`` = 发布日期时间戳(新闻类源才有,0 = 未知,用于「最新动态」视角)。
-"""
+"""统一的在线和离线检索入口。"""
 
 from __future__ import annotations
 
@@ -30,21 +14,16 @@ from . import config
 
 logger = logging.getLogger(__name__)
 
-# ── 结果质量过滤(与具体后端无关):命中即丢弃 ────────────────────────────────
+# 排除招聘、电商和聚合百科等站点，避免混入无关结果或二手资料。
 BAN_URL_SUBSTRINGS = {
-    # 招聘
     "kanzhun", "zhipin.com", "zhaopin.com", "51job.com", "liepin.com", "lagou.com",
     "maimai.cn", "linkedin.com", "yingjiesheng.com", "jobui.com", "shixiseng.com",
-    # 电商
     "taobao.com", "tmall.com", "jd.com", "pinduoduo.com", "suning.com", "dangdang.com",
     "vip.com", "amazon.cn", "you.163.com", "1688.com", "b2b.baidu.com", "yiche.com", "xcar.com",
-    # 企业商家 / 招标
     "chahaoba.com", "bidcenter.com", "qizhidao.com", "yaozh.com", "fang.com", "foodjx.com",
-    # 医疗(仅患者社区类)
     "haodf.com", "39.net", "jiankang.baidu.com", "dayi.org.cn", "99.com.cn", "youlai.cn",
     "chunyuyisheng.com", "120ask.com", "familydoctor.com.cn", "zhzyw.com", "yihu.com",
     "health.baidu.com",
-    # 百科 / 试题 / 盗版(内容平台内卷,来源质量低)
     "baike.baidu.com", "baike.com", "baike.so.com", "baike.sogou.com", "zupu.cn",
     "moegirl.org", "zybang.com", "wjx.cn", "shangxueba.com", "artron.net",
 }
@@ -56,13 +35,13 @@ def _url_is_banned(url: str) -> bool:
 
 
 def _host_of(url: str) -> str:
-    """取 URL 的站点名(去掉 www. 前缀),作为来源名称。"""
+    """取 URL 的域名作为来源名称，省略 www. 前缀。"""
     netloc = (urllib.parse.urlparse(url or "").netloc or "").lower()
     return netloc[4:] if netloc.startswith("www.") else netloc
 
 
 def _parse_date_ts(raw: str | None) -> int:
-    """Tavily 的 published_date(如 '2026-01-01' / '2026-01-01T12:00:00Z')→ Unix 秒;失败返回 0。"""
+    """将 Tavily 的发布日期转换为 Unix 秒，解析失败时返回 0。"""
     if not raw:
         return 0
     try:
@@ -74,9 +53,8 @@ def _parse_date_ts(raw: str | None) -> int:
             return 0
 
 
-# ── Tavily 后端(默认)────────────────────────────────────────────────────────
 def _search_tavily(query: str, top_k: int, with_images: bool) -> list[dict]:
-    """Tavily 搜索 → 过滤 → 按相关性排序 → 取前 top_k。"""
+    """调用 Tavily，过滤结果后按相关性取前 top_k。"""
     key = os.environ.get("TAVILY_API_KEY", "").strip()
     if not key:
         logger.warning("搜索后端未配置:请设置 TAVILY_API_KEY(参考 .env.example)")
@@ -87,7 +65,7 @@ def _search_tavily(query: str, top_k: int, with_images: bool) -> list[dict]:
         logger.error("缺少 tavily 依赖:请 `pip install -e '.[search]'`(或安装 baike-storm 完整依赖)")
         return []
 
-    time.sleep(0.2)  # 温和限流
+    time.sleep(0.2)  # 避免连续请求触发限流。
     kwargs: dict = {"query": query, "max_results": max(1, top_k), "search_depth": "basic"}
     if with_images:
         kwargs["include_images"] = True
@@ -131,7 +109,6 @@ def _f(v) -> float:
         return 0.0
 
 
-# ── Mock 后端(离线 demo / 单测)──────────────────────────────────────────────
 class _MockBackend:
     def __init__(self, corpus_dir: str | None = None):
         self._dir = corpus_dir or str(config.MOCK_CORPUS_DIR)
@@ -163,7 +140,6 @@ class _MockBackend:
                     continue
                 if w in (e.get("title", "") or "") or w in (e.get("name", "") or ""):
                     hits += 2
-                # 语料条目可自带 match 关键词(见 data/mock_corpus/README.md)
                 if any(w in m for m in (e.get("match") or [])):
                     hits += 1
             return hits
@@ -192,12 +168,8 @@ class _MockBackend:
 _MOCK = None
 
 
-# ── 统一入口 ────────────────────────────────────────────────────────────────
 def search(query: str, top_k: int = 5, with_images: bool = False) -> list[dict]:
-    """按配置的搜索后端检索,返回统一格式的条目列表(供 SourceLib 入库)。
-
-    后端由 ``STORM_SEARCH_BACKEND`` 指定:tavily(默认,需 TAVILY_API_KEY)/ mock(离线)。
-    """
+    """按配置的后端检索，并返回统一格式的条目。"""
     global _MOCK
     backend = os.environ.get("STORM_SEARCH_BACKEND", "tavily").strip().lower()
     if backend in ("mock", "local"):
