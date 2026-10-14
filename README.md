@@ -175,35 +175,6 @@ baike-storm eval 嫦娥六号 path/to/report.md
 baike-storm render runs/问界M9_storm    # 重新生成 index.html
 ```
 
-## 流水线调优
-
-调优针对提示词、检索参数和大纲策略，不涉及模型参数训练。
-
-- **评测驱动迭代**：使用 `eval` 分数和 `entity_recall` 作为提示词、检索参数和大纲策略的比较依据。修改提示词后重新评测，再横向比较结果。
-- **编辑指南**：`data/editorial_guidelines.example.md` 展示“大类 → 目录骨架 → 写作要点”的注入方式。将自己的分类体系整理成同格式文件，并用 `STORM_EDITORIAL_GUIDELINES` 指向它，`route_to_dalei` 会按大类加载对应骨架。
-- **复现性**：
-  - `STORM_TODAY=YYYY-MM-DD` 固定运行日期，影响“最新动态”视角和时间表述；
-  - mock 后端输出确定，同一输入会产生同样的产物；
-  - 检索和 LLM 通过环境变量配置，更换网关不需要修改代码。
-
-## 常用配置
-
-| 环境变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `STORM_LLM_BACKEND` | （空） | `mock` 使用离线规则引擎；缺省使用 OpenAI 兼容客户端 |
-| `STORM_LLM_BASE_URL` / `STORM_LLM_API_KEY` / `STORM_LLM_MODEL` | - | 主 LLM；兼容 `OPENAI_*` 和 `RESEARCH_MODEL` |
-| `STORM_SEARCH_BACKEND` | `tavily` | `mock` 读取 `data/mock_corpus/*.json` |
-| `STORM_SEARCH_TOP_K` / `STORM_SECTION_TOP_K` | 4 / 14 | 视角检索和分节写作的召回条数 |
-| `STORM_MIN_CHAPTERS` / `STORM_MAX_CHAPTERS` | 6 / 9 | 大章数范围，超上限时自动合并 |
-| `STORM_NEWS` / `STORM_RECENT_DAYS` | 1 / 365 | “最新动态”视角开关和时间范围 |
-| `STORM_FIG_PLAN` | 1 | 生成后进行版面规划；`0` 使用规则排版 |
-| `JUDGE_BASE_URL` / `JUDGE_API_KEY` / `JUDGE_MODEL` | - | 评测 judge；`JUDGE_BACKEND=anthropic` 使用 Anthropic 协议 |
-| `ENTITY_RECALL_LLM` | 1 | `0` 使用词法匹配判断事实，无需再次调用 LLM |
-| `STORM_TODAY` | 今天 | 固定运行日期，用于复现实验 |
-| `STORM_RUNS_DIR` / `STORM_GOLD_DIR` | `runs/` / `data/gold/` | 产物和评测目录 |
-
-完整清单见 [.env.example](.env.example) 和 [src/baike_storm/config.py](src/baike_storm/config.py)。
-
 ## 测试
 
 ```bash
