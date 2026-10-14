@@ -189,6 +189,14 @@ python -m pytest          # 全部离线，不发起网络请求
 - **更换 judge**：`score.py` 支持 `openai`（默认）和 `anthropic` 两种协议端点。
 - **接入自有词条体系**：将分类模板整理为编辑指南文件（格式见 `editorial_guidelines.example.md`），即可复用同类词条的分节规则。
 
+## 参考与致谢
+
+本项目在开发过程中参考了以下开源项目与研究，感谢作者和社区的分享：
+
+- **[STORM 论文](https://arxiv.org/abs/2402.14207)**：提供了多视角提问、调研对话和检索增强写作的方法参考。本项目借鉴这些思路，将调研材料整理成大纲，再分节生成带引用的中文百科内容。
+- **[LangChain DeepAgents](https://github.com/langchain-ai/deepagents)**：其规划、任务拆解和工具协作思路，为本项目组织多步骤调研与写作流程提供了启发。本项目将视角发现、检索问答、大纲和写作组织成显式的 Python 流水线。
+- **[Taste Skill](https://github.com/leonxlnx/taste-skill)**：为前端视觉设计提供了参考，启发了聊天页与百科阅读页在字体、留白、信息层级和内容布局上的处理。
+
 ## License
 
 [MIT](LICENSE)
