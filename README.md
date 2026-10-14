@@ -145,6 +145,8 @@ baike-storm web --port 8765
 # 打开 http://127.0.0.1:8765/，输入词条即可查看生成过程
 ```
 
+![百科 STORM 生成助手聊天页：输入词条、选择视角与轮数，并查看生成过程](docs/assets/web-chat-preview.png)
+
 ### 评测（LLM judge）
 
 ```bash
