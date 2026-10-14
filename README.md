@@ -4,8 +4,6 @@
 
 借鉴了 [STORM](https://arxiv.org/abs/2402.14207) 论文中的多视角调研和检索增强写作思路。
 
-LLM 网关、检索后端和评测 judge 均可替换；demo 模式可以离线跑通整条流水线。
-
 ## 流水线
 
 ![baike-storm 流程：视角发现、多视角调研、两段式大纲、分节生成、后处理、页面渲染](docs/assets/storm-pipeline.svg)
@@ -14,7 +12,6 @@ LLM 网关、检索后端和评测 judge 均可替换；demo 模式可以离线�
 
 ## 先看演示
 
-- [打开 GitHub Pages 演示首页](https://zhaoxiaoyibing.github.io/baike-storm/)
 - [阅读凯里·欧文完整词条](https://zhaoxiaoyibing.github.io/baike-storm/examples/kyrie-demo/)
 - [在哔哩哔哩观看前端生成演示](https://www.bilibili.com/video/BV13kpz64EUp/)
 
@@ -22,8 +19,6 @@ LLM 网关、检索后端和评测 judge 均可替换；demo 模式可以离线�
   <source src="https://zhaoxiaoyibing.github.io/baike-storm/examples/frontend-demo/baike-storm-kyrie-demo.mp4" type="video/mp4">
   当前页面不支持内嵌播放，请打开<a href="https://zhaoxiaoyibing.github.io/baike-storm/examples/frontend-demo/">视频页面</a>。
 </video>
-
-<sub>前端生成流程 · 倍速配乐版 · 也可<a href="https://zhaoxiaoyibing.github.io/baike-storm/examples/frontend-demo/">打开独立视频页</a></sub>
 
 <a href="https://zhaoxiaoyibing.github.io/baike-storm/examples/kyrie-demo/">
   <img src="examples/kyrie-demo/kyrie-page-preview.png" alt="凯里·欧文完整词条页面截图" width="100%">
@@ -36,9 +31,6 @@ LLM 网关、检索后端和评测 judge 均可替换；demo 模式可以离线�
 - **多视角调研**：`discover_perspectives` 规划 N 个互补视角。Writer 与 Expert 通过检索增强问答对话，把外部资料压缩成大纲和写作所需的上下文。
 - **两段式大纲**：先草拟，再结合调研内容精修；章节数超上限时自动合并。
 - **全局引用去重**：`SourceLib` 按 URL 去重并生成全局 `[n]` 编号，报告、信息栏和配图共用这套引用。
-- **LLM judge 评测**：固定 rubric，按事实覆盖、准确性各 30%，结构、引用各 15%，可读性 10% 评分，并计算 `entity_recall` 关键事实召回率。
-- **离线复现**：将 `STORM_LLM_BACKEND` 和 `STORM_SEARCH_BACKEND` 设为 `mock` 即可离线跑通；用 `STORM_TODAY` 固定运行日期，方便复现实验。
-- **无内部依赖**：LLM 使用任意 OpenAI 兼容的 `chat/completions` 接口，检索后端和 judge 通过环境变量配置。
 
 ## 目录结构
 
@@ -216,15 +208,6 @@ baike-storm render runs/问界M9_storm    # 重新生成 index.html
 pip install -e ".[tests]"
 python -m pytest          # 全部离线，不发起网络请求
 ```
-
-## 公开演示
-
-- [离线 HTML 示例](examples/ai-demo/index.html)
-- [凯里·欧文 HTML 示例](examples/kyrie-demo/index.html)
-- [前端配乐演示视频](examples/frontend-demo/index.html)
-- [演示材料说明](examples/README.md)
-
-启用 GitHub Pages 后可访问 <https://zhaoxiaoyibing.github.io/baike-storm/>。设置路径：仓库 **Settings → Pages → Build and deployment → Deploy from a branch**，选择 `main` 分支和 `/ (root)` 目录。
 
 ## 扩展
 
